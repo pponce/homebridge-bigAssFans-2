@@ -1122,8 +1122,12 @@ function makeCoordinatedLights(pA: BAF) {
         const light = requireWhiteLight(pA);
         return pA.dualLightModeControl === 'channels' ? light.channelOn(mode as 1 | 2) : light.view.selection === mode;
       })
-      .onSet(value => writeWhiteLight(pA, light => pA.dualLightModeControl === 'channels'
-        ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value))));
+      .onSet(async value => {
+        await writeWhiteLight(pA, light => pA.dualLightModeControl === 'channels'
+          ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value)));
+        // HAP caches the requested value after onSet resolves. Reassert radio selection afterwards.
+        setTimeout(() => syncCoordinatedLights(pA), 0);
+      });
     pA.lightModeServices.set(mode, service);
   }
 }
