@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
+import { mock } from 'node:test';
 import { DualLightCoordinator, lightCommand, rgbToHueSaturation, type LightCommand, type WhiteLightState } from '../src/lighting';
 
 function harness(memory = { down: 25, up: 75 }) {
   const commands: LightCommand[][] = [];
   const warnings: string[] = [];
+  let refreshes = 0;
   let fail = false;
   const light = new DualLightCoordinator(memory, batch => {
     if (fail) {
       throw new Error('Disconnected');
     }
     commands.push(batch);
-  }, () => undefined, () => undefined, message => warnings.push(message));
+  }, () => { refreshes++; }, () => undefined, message => warnings.push(message));
   light.report({ selection: 1, power: 1, brightness: 25, kelvin: 3000, minKelvin: 2700, maxKelvin: 4000 });
-  return { light, commands, warnings, fail: () => { fail = true; } };
+  return { light, commands, warnings, get refreshes() { return refreshes; }, fail: () => { fail = true; } };
 }
 
 async function apply(light: DualLightCoordinator, changes: Promise<void>[], actual?: Partial<WhiteLightState>) {
@@ -116,19 +118,87 @@ async function main() {
   failure.light.disconnect();
   await cancelled;
 
-  // Stale in-flight echoes do not overwrite the requested mode or the other brightness memory.
+  // The device report wins even during an outstanding HomeKit command.
+  // There is no source/revision marker that can distinguish a BAF app change from an echo.
   const stale = harness();
   const change = stale.light.select(2, true);
   stale.light.flush();
   await change;
   assert.deepEqual(stale.light.persistedMemory, { down: 25, up: 75 });
   stale.light.report({ selection: 1, power: 1, brightness: 25 });
-  assert.equal(stale.light.state.selection, 2);
+  assert.equal(stale.light.state.selection, 1);
   stale.light.report({ selection: 2, power: 1, brightness: 73 });
   assert.equal(stale.light.state.brightness, 73);
   assert.deepEqual(stale.light.memory, { down: 25, up: 73 });
   stale.light.disconnect();
 
+  const external = harness();
+  const homeChange = external.light.setBrightness(60);
+  external.light.flush();
+  await homeChange;
+  // BAF sets 35% before the HomeKit request has been confirmed.
+  external.light.report({ brightness: 35 });
+  assert.equal(external.light.view.brightness, 35);
+  assert.equal(external.light.persistedMemory.down, 35);
+  assert.equal(external.commands.length, 1, 'A device report must never issue a write');
+  await apply(external.light, [external.light.setTemperature(286)], { kelvin: 3500 });
+  assert.deepEqual(external.commands.at(-1), [{ field: 71, value: 3497 }]);
+  assert.equal(external.light.state.brightness, 35);
+  external.light.disconnect();
+
+  // Unrelated commands while off must not turn a remembered level into a brightness write.
+  const zero = harness();
+  zero.light.report({ brightness: 0, power: 0 });
+  await apply(zero.light, [zero.light.setTemperature(286)], { kelvin: 3500 });
+  assert.deepEqual(zero.commands.at(-1), [{ field: 71, value: 3497 }], 'Temperature while off must not restore brightness');
+  const beforeOff = zero.commands.length;
+  await apply(zero.light, [zero.light.setPower(false)]);
+  assert.equal(zero.commands.length, beforeOff, 'Off while already off must not send brightness');
+  await apply(zero.light, [zero.light.setPower(true), zero.light.setBrightness(0)], { power: 0, brightness: 0 });
+  assert.equal(zero.commands.at(-1)?.find(command => command.field === 68)?.value, 0);
+  assert.equal(zero.light.state.power, 0, 'Zero brightness takes precedence over a companion On=true write');
+  zero.light.disconnect();
+
+  // Push feedback cancels readback queries, even when the returned value differs.
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const feedback = harness();
+    const change = feedback.light.setBrightness(60);
+    feedback.light.flush();
+    await change;
+    feedback.light.report({ brightness: 35 });
+    mock.timers.tick(3000);
+    assert.equal(feedback.light.state.brightness, 35);
+    assert.equal(feedback.refreshes, 0);
+    assert.equal(feedback.warnings.length, 0, 'A different reported value is not a feedback timeout');
+    assert.equal(feedback.commands.length, 1);
+    feedback.light.disconnect();
+
+    // Sliding continuously coalesces queries; lack of feedback never retries a write.
+    const burst = harness();
+    for (const value of [30, 40, 50, 60]) {
+      const change = burst.light.setBrightness(value);
+      burst.light.flush();
+      await change;
+      mock.timers.tick(100);
+    }
+    assert.equal(burst.refreshes, 0);
+    mock.timers.tick(250);
+    assert.equal(burst.refreshes, 1);
+    mock.timers.tick(2500);
+    assert.equal(burst.warnings.length, 1);
+    assert.match(burst.warnings[0], /missing: brightness/);
+    assert.equal(burst.light.state.brightness, 25);
+    assert.equal(burst.commands.length, 4, 'Timeouts and readbacks must not retry brightness');
+    burst.light.disconnect();
+    const queries = burst.refreshes;
+    mock.timers.tick(5000);
+    assert.equal(burst.refreshes, queries, 'Disconnect cancels pending readbacks');
+  } finally {
+    mock.timers.reset();
+  }
+
   console.log('Coordinated lighting tests passed.');
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });
+

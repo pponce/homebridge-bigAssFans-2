@@ -1023,6 +1023,9 @@ function requireWhiteLight(pA: BAF) {
 async function writeWhiteLight(pA: BAF, action: (light: DualLightCoordinator) => Promise<void>) {
   try {
     await action(requireWhiteLight(pA));
+    // HAP stores the requested value after onSet resolves. Restore the
+    // coordinated value afterwards (including combined On/brightness writes).
+    setTimeout(() => syncCoordinatedLights(pA), 0);
   } catch (error) {
     pA.platform.log.warn(pA.Name + ' white light: ' + (error instanceof Error ? error.message : String(error)));
     throw new pA.platform.api.hap.HapStatusError(pA.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
@@ -1075,7 +1078,7 @@ function makeCoordinatedLights(pA: BAF) {
     pA.whiteLight = new DualLightCoordinator(
       pA.accessory.context.whiteLightMemory,
       commands => commands.forEach(command => clientWrite(pA.client, lightCommand(command.field, command.value), pA, true)),
-      () => sendStateRefreshRequest(pA),
+      () => sendLightStateRefreshRequest(pA),
       () => syncCoordinatedLights(pA),
       message => pA.platform.log.warn(pA.Name + ' - ' + message),
     );
@@ -1122,12 +1125,8 @@ function makeCoordinatedLights(pA: BAF) {
         const light = requireWhiteLight(pA);
         return pA.dualLightModeControl === 'channels' ? light.channelOn(mode as 1 | 2) : light.view.selection === mode;
       })
-      .onSet(async value => {
-        await writeWhiteLight(pA, light => pA.dualLightModeControl === 'channels'
-          ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value)));
-        // HAP caches the requested value after onSet resolves. Reassert radio selection afterwards.
-        setTimeout(() => syncCoordinatedLights(pA), 0);
-      });
+      .onSet(value => writeWhiteLight(pA, light => pA.dualLightModeControl === 'channels'
+        ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value))));
     pA.lightModeServices.set(mode, service);
   }
 }
@@ -2093,6 +2092,13 @@ function sendStateRefreshRequest(pA: BAF) {
     return;
   }
   clientWrite(pA.client, [0x12, 0x02, 0x1a, 0x00], pA);  // request current state snapshot
+}
+
+function sendLightStateRefreshRequest(pA: BAF) {
+  if (!pA.client) {
+    return;
+  }
+  clientWrite(pA.client, [0x12, 0x04, 0x1a, 0x02, 0x08, 0x02], pA); // Query.Type.Light; no write commands
 }
 
 function fanRotationDirection(s: string, pA:BAF) {
@@ -3901,6 +3907,7 @@ export const __test__ = {
   makeCoordinatedLights,
   normalizeLightDetectionOverride,
   makeServices,
+  sendLightStateRefreshRequest,
   onData,
   percentToRotationSpeed,
   reconcileCapabilities,
@@ -3914,3 +3921,4 @@ export const __test__ = {
     connectSocket = net.connect;
   },
 };
+

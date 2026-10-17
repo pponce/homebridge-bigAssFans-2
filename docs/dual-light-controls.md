@@ -12,6 +12,10 @@ Down and Up remember separate brightness levels. Entering Both restores Down's r
 
 Changes made in the BAF app or with the remote are authoritative. Their reported brightness updates the memory for the reported mode. The plugin applies its restore rule when changing modes from HomeKit; it does not fight changes made by other controllers.
 
+Incoming fan reports update HomeKit even while a HomeKit command is awaiting feedback. The protocol does not identify which controller made a change, so a differing report is accepted rather than held until it matches an older HomeKit target. Reports never generate a corrective brightness write. When two controllers send commands at once, the fan's processing order determines the resulting setting.
+
+White-light readbacks are coalesced after slider changes and query lighting state only. Push feedback can cancel a pending readback. A feedback-timeout warning names the missing fields and includes the requested and reported states; it triggers a read query, not a retry of the command. It cannot establish why the fan failed to report. Color-temperature and Off commands do not restore brightness while the light is off.
+
 ## White temperature
 
 HomeKit's white-temperature picker sends a Kelvin value through the local API, without restricting it to the four BAF app presets. The fan's reported minimum and maximum temperatures set the available range. Until those bounds arrive, the plugin uses a conservative 2700–4000 K range, expanded to include an already reported current temperature.
@@ -60,3 +64,4 @@ Automated tests cannot establish undocumented firmware behavior. Check these on 
 8. Enable the night light, change its color in both apps, and confirm standby behavior when white lighting is on/off.
 9. Restart Homebridge and confirm memory survives. Disconnect the fan and confirm commands fail, then recover after reconnection.
 10. Check another fan with one light and a device without a night light: neither should gain unsupported tiles.
+

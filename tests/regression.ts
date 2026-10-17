@@ -35,6 +35,7 @@ class FakeSocket extends EventEmitter {
 class FakeService {
   public values = new Map<string, unknown>();
   public characteristics = new Set<string>();
+  public setters = new Map<string, (value: unknown) => unknown>();
 
   updateCharacteristic(characteristic: string, value: unknown) {
     this.values.set(characteristic, value);
@@ -66,13 +67,15 @@ class FakeService {
     return this;
   }
 
-  getCharacteristic(_characteristic: string) {
+  getCharacteristic(characteristic: string) {
+    const service = this;
     return {
       setProps() { return this; },
       onGet() {
         return this;
       },
-      onSet() {
+      onSet(handler: (value: unknown) => unknown) {
+        service.setters.set(characteristic, handler);
         return this;
       },
     };
@@ -958,6 +961,38 @@ function testUplightOnlyIsNotMistakenForDualLight() {
   assert.equal(accessory.getServiceById('Lightbulb', 'light-3'), undefined);
 }
 
+async function testExternalLightReportWinsDuringHomeKitWrite() {
+  const { state, accessory } = createDualLightTestState();
+  __test__.makeServices(state);
+  __test__.onData(state, reportFrame([[82, 1], [68, 1], [69, 25]]));
+  const change = state.whiteLight!.setBrightness(60);
+  state.whiteLight!.flush();
+  await change;
+  const socket = state.client as unknown as FakeSocket;
+  const writes = socket.writes.length;
+  __test__.onData(state, reportFrame([[69, 35]]));
+  assert.equal(accessory.getServiceById('Lightbulb', 'white-light')?.values.get('Brightness'), 35);
+  assert.equal(accessory.context.whiteLightMemory?.down, 35);
+  assert.equal(socket.writes.length, writes, 'Reflecting a BAF change must not send it back to the fan');
+  __test__.sendLightStateRefreshRequest(state);
+  assert.deepEqual(socket.writes.at(-1), Buffer.from([0xc0, 0x12, 0x04, 0x1a, 0x02, 0x08, 0x02, 0xc0]));
+  state.whiteLight!.disconnect();
+}
+
+async function testHomeKitAckDoesNotTurnZeroBrightnessBackOn() {
+  const { state, accessory } = createDualLightTestState();
+  __test__.makeServices(state);
+  __test__.onData(state, reportFrame([[82, 1], [68, 1], [69, 25]]));
+  const service = accessory.getServiceById('Lightbulb', 'white-light')!;
+  const on = Promise.resolve(service.setters.get('On')!(true)).then(() => service.updateCharacteristic('On', true));
+  const brightness = Promise.resolve(service.setters.get('Brightness')!(0)).then(() => service.updateCharacteristic('Brightness', 0));
+  state.whiteLight!.flush();
+  await Promise.all([on, brightness]);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(service.values.get('On'), false);
+  state.whiteLight!.disconnect();
+}
+
 function testStandbyMessageEnvelope() {
   const message = Buffer.from(__test__.buildStandbyLEDColorMessage(128, 255, 64));
   // ApiMessage -> Job -> repeated Property -> StandbyLed. There must be no protobuf group delimiters.
@@ -974,6 +1009,8 @@ function testStandbyMessageEnvelope() {
 }
 
 async function main() {
+  await testExternalLightReportWinsDuringHomeKitWrite();
+  await testHomeKitAckDoesNotTurnZeroBrightnessBackOn();
   testCoordinatedServiceLifecycleAndFragmentedReports();
   testUplightOnlyIsNotMistakenForDualLight();
   testStandbyMessageEnvelope();
@@ -1010,3 +1047,4 @@ void main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+

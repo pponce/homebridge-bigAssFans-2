@@ -25,6 +25,7 @@ export class DualLightCoordinator {
   private pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private debounce?: ReturnType<typeof setTimeout>;
   private confirmation?: ReturnType<typeof setTimeout>;
+  private refreshTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     memory: LightMemory | undefined,
@@ -48,10 +49,11 @@ export class DualLightCoordinator {
   get view(): WhiteLightState {
     const selection = this.intent.selection ?? this.state.selection;
     const remembered = this.memory[selection === 2 ? 'up' : 'down'];
-    const restoring = selection !== this.state.selection || this.state.brightness === 0;
+    const turningOn = (this.intent.power !== undefined && this.intent.power > 0) || this.intent.selection !== undefined;
+    const restoring = selection !== this.state.selection || (turningOn && this.state.brightness === 0);
     const brightness = this.intent.brightness ?? (restoring ? (remembered ?? (this.state.brightness || 50)) : this.state.brightness);
-    const power = this.intent.power ?? (this.intent.brightness === 0 ? 0
-      : this.intent.selection !== undefined || this.intent.brightness !== undefined ? 1 : this.state.power);
+    const power = this.intent.brightness === 0 ? 0 : this.intent.power ??
+      (this.intent.selection !== undefined || this.intent.brightness !== undefined ? 1 : this.state.power);
     return { ...this.state, selection, power, brightness, kelvin: this.intent.kelvin ?? this.state.kelvin };
   }
 
@@ -105,6 +107,9 @@ export class DualLightCoordinator {
     if (!this.ready) {
       return Promise.reject(new Error('Waiting for the fan to report its lighting state'));
     }
+    if (Object.keys(intent).length === 0) {
+      return Promise.resolve();
+    }
     this.intent = { ...this.intent, ...intent };
     clearTimeout(this.debounce);
     this.debounce = setTimeout(() => this.flush(), 80);
@@ -144,16 +149,19 @@ export class DualLightCoordinator {
         commands.forEach(command => this.awaiting.add(keys[command.field]));
         clearTimeout(this.confirmation);
         this.confirmation = setTimeout(() => {
+          const missing = [...this.awaiting].join(', ');
+          const requested = JSON.stringify(this.expected);
           this.expected = undefined;
           this.awaiting.clear();
           this.memory = this.memoryBeforeWrite ?? this.memory;
           this.memoryBeforeWrite = undefined;
           this.acceptReport();
-          this.warn('White-light change was not confirmed; showing the last reported fan state.');
-          this.refresh();
+          this.warn(`White-light feedback timed out (missing: ${missing}); using the last reported fan state. ` +
+            `Requested: ${requested}; reported: ${JSON.stringify(this.reported)}.`);
+          this.scheduleRefresh();
         }, 2500);
         this.confirmation.unref?.();
-        this.refresh();
+        this.scheduleRefresh();
       }
       this.changed();
       pending.forEach(waiter => waiter.resolve());
@@ -163,11 +171,22 @@ export class DualLightCoordinator {
     }
   }
 
+  private scheduleRefresh() {
+    // Let push updates arrive first. Slider changes share one readback query
+    // after they settle instead of requesting a full snapshot on every write.
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      this.refresh();
+    }, 250);
+    this.refreshTimer.unref?.();
+  }
+
   /** Apply a complete frame together so a mode change cannot corrupt another mode's memory. */
   report(update: Partial<WhiteLightState>) {
     if (update.selection !== undefined && update.selection !== this.reported.selection && update.brightness === undefined) {
       delete this.reported.brightness;
-      this.refresh();
+      this.scheduleRefresh();
     }
     this.reported = { ...this.reported, ...update };
     Object.keys(update).forEach(key => this.awaiting.delete(key as keyof WhiteLightState));
@@ -176,15 +195,17 @@ export class DualLightCoordinator {
       return;
     }
     this.ready = true;
-    const e = this.expected;
-    // Brightness may be quantized to 16 steps. Color temperature may also be rounded by firmware.
-    if (e && (this.awaiting.size || r.selection !== e.selection || r.power !== e.power ||
-        (e.power !== 0 && Math.abs(r.brightness - e.brightness) > 4))) {
-      return;
-    }
-    clearTimeout(this.confirmation);
-    this.expected = undefined;
+    // Reports do not identify which controller changed the light. A differing
+    // value may be a BAF app/remote/Matter change or firmware rounding, so it
+    // must update HomeKit immediately, even while another write awaits feedback.
+    // Discard speculative memory before remembering the actual reported mode.
+    this.memory = this.memoryBeforeWrite ?? this.memory;
     this.memoryBeforeWrite = undefined;
+    if (this.awaiting.size === 0) {
+      clearTimeout(this.confirmation);
+      clearTimeout(this.refreshTimer);
+      this.expected = undefined;
+    }
     this.acceptReport();
   }
 
@@ -208,6 +229,7 @@ export class DualLightCoordinator {
   disconnect() {
     clearTimeout(this.debounce);
     clearTimeout(this.confirmation);
+    clearTimeout(this.refreshTimer);
     this.ready = false;
     this.reported = {};
     this.intent = {};
@@ -247,3 +269,4 @@ export function rgbToHueSaturation(red: number, green: number, blue: number): [n
   const hue = max === red ? (green - blue) / delta : max === green ? (blue - red) / delta + 2 : (red - green) / delta + 4;
   return [(hue * 60 + 360) % 360, max === 0 ? 0 : delta / max * 100];
 }
+
