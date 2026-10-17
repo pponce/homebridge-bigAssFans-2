@@ -2,6 +2,7 @@ import * as net from 'net';
 import {
   applyCapabilityConfig,
   parseCapabilitiesFromSlipData,
+  parseMacFromSlipData,
   suggestCapabilityConfig,
   summarizeCapabilityExposure,
   type Capabilities,
@@ -47,6 +48,7 @@ interface ConnectionDiagnostic {
   latencyMs?: number;
   bytesReceived?: number;
   errorCode?: string;
+  mac?: string;
   capabilities?: Capabilities;
   capabilitySummary?: CapabilityExposureSummary;
   capabilitySuggestions?: CapabilityConfigSuggestion[];
@@ -57,6 +59,7 @@ const FAN_PORT = 31415;
 const DEFAULT_TIMEOUT_MS = 4500;
 const CAPABILITY_QUERY = [0x12, 0x04, 0x1a, 0x02, 0x08, 0x06];
 const STATE_REFRESH = [0x12, 0x02, 0x1a, 0x00];
+const NETWORK_QUERY = [0x12, 0x04, 0x1a, 0x02, 0x08, 0x04];
 const START = 0xc0;
 const ESC = 0xdb;
 const START_STUFF = 0xdc;
@@ -129,9 +132,7 @@ function validateFan(fan: NormalizedFanConfig): string | undefined {
   if (!fan.ip) {
     return 'Fan IP address or hostname is required.';
   }
-  if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(fan.mac)) {
-    return 'Fan MAC address must use the format 20:F8:5E:00:00:00.';
-  }
+  // The MAC identifies the saved HomeKit accessory; it is not needed to probe an IP.
   return undefined;
 }
 
@@ -153,7 +154,6 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
     let bytesReceived = 0;
     let receivedData = Buffer.alloc(0);
     let timeout: ReturnType<typeof setTimeout>;
-    let responseGraceTimeout: ReturnType<typeof setTimeout> | undefined;
     const socket = net.connect({ port: FAN_PORT, host: fan.ip });
 
     const finish = (result: Omit<ConnectionDiagnostic, 'checkedAt'>) => {
@@ -162,9 +162,6 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
       }
       settled = true;
       clearTimeout(timeout);
-      if (responseGraceTimeout !== undefined) {
-        clearTimeout(responseGraceTimeout);
-      }
       socket.removeAllListeners();
       socket.destroy();
       resolve({
@@ -196,6 +193,7 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
       socket.setKeepAlive(true);
       socket.write(frameMessage(CAPABILITY_QUERY));
       socket.write(frameMessage(STATE_REFRESH));
+      socket.write(frameMessage(NETWORK_QUERY));
     });
 
     socket.on('data', (data: Buffer) => {
@@ -203,7 +201,7 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
       receivedData = Buffer.concat([receivedData, data]);
       const capabilityDetails = getCapabilityDetails(receivedData, fan);
 
-      if (capabilityDetails.capabilities) {
+      if (capabilityDetails.capabilities && capabilityDetails.mac) {
         finish({
           ok: true,
           state: 'responded',
@@ -215,20 +213,8 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
         return;
       }
 
-      if (responseGraceTimeout !== undefined) {
-        clearTimeout(responseGraceTimeout);
-      }
-
-      responseGraceTimeout = setTimeout(() => {
-        finish({
-          ok: true,
-          state: 'responded',
-          message: `Fan responded on ${fan.ip}:${FAN_PORT}, but capability details were not present in the diagnostic response.`,
-          latencyMs: Date.now() - startedAt,
-          bytesReceived,
-          ...getCapabilityDetails(receivedData, fan),
-        });
-      }, 300);
+      // Capabilities and identity can arrive in separate TCP messages. Keep
+      // collecting until both arrive, the socket closes, or the probe times out.
     });
 
     socket.on('timeout', () => {
@@ -283,10 +269,12 @@ function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT
 function getCapabilityDetails(
   data: Buffer,
   fan: NormalizedFanConfig,
-): Pick<ConnectionDiagnostic, 'capabilities' | 'capabilitySummary' | 'capabilitySuggestions' | 'capabilityMessage'> {
+): Pick<ConnectionDiagnostic, 'mac' | 'capabilities' | 'capabilitySummary' | 'capabilitySuggestions' | 'capabilityMessage'> {
+  const mac = parseMacFromSlipData(data);
   const rawCapabilities = parseCapabilitiesFromSlipData(data);
   if (!rawCapabilities) {
     return {
+      mac,
       capabilityMessage: 'Capability details were not reported in this diagnostic response.',
     };
   }
@@ -299,6 +287,7 @@ function getCapabilityDetails(
     : 'none';
 
   return {
+    mac,
     capabilities,
     capabilitySummary,
     capabilitySuggestions,

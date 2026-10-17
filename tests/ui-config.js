@@ -104,7 +104,8 @@ async function openPage(configs = [config], options = {}) {
     enableSaveButton: () => { host.saveEnabled = true; },
     request: async (route, body) => {
       host.requests.push({ route, body: clone(body) });
-      return { ok: true, result: { ok: true, capabilities: { hasLight: true, hasUplight: true } } };
+      if (options.requestGate) { await options.requestGate.promise; }
+      return { ok: true, result: { ok: true, mac: "AA:BB:CC:DD:EE:FF", capabilities: { hasLight: true, hasUplight: true } } };
     },
     toast: Object.fromEntries(["success", "warning", "error"].map((level) => [level, (message) => host.toasts.push({ level, message })])),
   };
@@ -272,4 +273,56 @@ test("Homebridge Save stays disabled while the existing configuration loads", as
   await page.settle();
   assert.equal(page.host.saveEnabled, true);
   assert.equal(page.cards().length, 1);
+});
+
+test("name and IP can be tested before options; the discovered MAC and selected options save", async () => {
+  const page = await openPage([]);
+  page.elements.get("add-fan").dispatch("click");
+  page.edit(0, "name", "New es6");
+  page.edit(0, "ip", "new-fan.local");
+  await page.settle();
+  assert.equal(page.host.saveEnabled, false, "Missing MAC still prevents saving");
+  const card = page.cards()[0];
+  const button = card.querySelectorAll("button").find((b) => b.textContent === "Test Connection");
+  const controls = card.querySelectorAll("input");
+  assert.deepEqual(controls.slice(0, 2).map((input) => input.dataset.fanField), ["name", "ip"]);
+  assert.ok(card.children.indexOf(button.parent) < card.children.indexOf(card.querySelector(".setting-section")));
+  button.dispatch("click");
+  await page.settle();
+  assert.equal(page.host.requests[0].body.fan.mac, "");
+  assert.equal(page.cards()[0].querySelector('[data-fan-field="mac"]').value, "AA:BB:CC:DD:EE:FF");
+  assert.equal(page.cards()[0].querySelector(".pill").textContent, "Features detected");
+  page.edit(0, "dualLightModeControl", "channels");
+  page.edit(0, "showStandbyLED", true);
+  await page.settle();
+  assert.equal(page.cards()[0].querySelector(".pill").textContent, "Features detected");
+  await page.hostSave();
+  assert.equal(page.host.saved[0].fans[0].mac, "AA:BB:CC:DD:EE:FF");
+  assert.equal(page.host.saved[0].fans[0].dualLightModeControl, "channels");
+  assert.equal(page.host.saved[0].fans[0].showStandbyLED, true);
+});
+
+test("testing preserves an existing HomeKit MAC and warns about a different fan", async () => {
+  const page = await openPage();
+  page.cards()[0].querySelectorAll("button").find((b) => b.textContent === "Test Connection").dispatch("click");
+  await page.settle();
+  assert.equal(page.cards()[0].querySelector('[data-fan-field="mac"]').value, existingFan.mac);
+  assert.match(page.cards()[0].querySelector(".connection-result").textContent, /reported MAC differs/);
+  page.edit(0, "ip", "another-fan.local");
+  assert.equal(page.cards()[0].querySelector(".pill").textContent, "Not tested");
+});
+
+test("a test for a previous IP cannot fill the MAC or mark the new address detected", async () => {
+  const gate = deferred();
+  const page = await openPage([], { requestGate: gate });
+  page.elements.get("add-fan").dispatch("click");
+  page.edit(0, "name", "Fan");
+  page.edit(0, "ip", "first.local");
+  page.cards()[0].querySelectorAll("button").find((b) => b.textContent === "Test Connection").dispatch("click");
+  page.edit(0, "ip", "second.local");
+  gate.resolve();
+  await page.settle();
+  assert.equal(page.cards()[0].querySelector('[data-fan-field="mac"]').value, "");
+  assert.equal(page.cards()[0].querySelector(".pill").textContent, "Not tested");
+  assert.equal(page.host.saveEnabled, false);
 });

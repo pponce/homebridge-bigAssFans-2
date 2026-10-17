@@ -2,6 +2,8 @@
 
 Fans that report both a downlight and an uplight get one **White Light** tile with power, brightness and (when supported) color temperature.
 
+When adding a fan, enter its name and IP address or hostname, then use **Test Connection** directly below those fields. The test reads supported features and fills an empty MAC address field from the fan's identity report. Select your options and save. If the fan does not report its MAC, enter it from the BAF app's Wi-Fi settings before saving. Existing MAC addresses are preserved because they identify paired HomeKit accessories; a mismatch is shown for review. Testing does not save the configuration.
+
 Choose **Dual-light mode controls** in the plugin settings:
 
 - **Down / Up / Both — one selected** (`exclusive`, default): selecting a mode turns the white light on. Turning the selected mode switch off leaves it selected; use White Light to turn the light off. The selected mode remains visible while the light is off.

@@ -4,7 +4,7 @@ import * as net from 'net';
 import { mock } from 'node:test';
 
 import { __test__, BigAssFans_i6PlatformAccessory } from '../src/platformAccessory';
-import { parseCapabilitiesFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
+import { parseCapabilitiesFromSlipData, parseMacFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
 import { emptyNightLightState, NightLightCoordinator, nightLightCommand, type NightLightState } from '../src/nightlight';
 
 class FakeHapStatusError extends Error {
@@ -738,6 +738,27 @@ function testCapabilityParserExtractsLiveCapabilities() {
   assert.deepEqual(summary.notReportedButEnabled, ['temperature', 'humidity']);
 }
 
+function testMacDiscoveryReadsOnlyFanIdentity() {
+  const frame = (properties: Buffer) => Buffer.concat([
+    Buffer.from([0xc0]),
+    Buffer.from([...protobufMessageField(2, protobufMessageField(4, protobufMessageField(2, properties)))]
+      .flatMap(byte => byte === 0xc0 ? [0xdb, 0xdc] : byte === 0xdb ? [0xdb, 0xdd] : [byte])),
+    Buffer.from([0xc0]),
+  ]);
+  const remote = protobufMessageField(152, protobufMessageField(4, Buffer.from('11:22:33:44:55:66')));
+  assert.equal(parseMacFromSlipData(frame(remote)), undefined);
+  for (const mac of ['aa:bb:cc:dd:ee:ff', 'aa-bb-cc-dd-ee-ff', 'aabbccddeeff']) {
+    const bytes = frame(Buffer.concat([remote, protobufMessageField(8, Buffer.from(mac))]));
+    assert.equal(parseMacFromSlipData(bytes.subarray(0, bytes.length - 1)), undefined);
+    assert.equal(parseMacFromSlipData(bytes), 'AA:BB:CC:DD:EE:FF');
+  }
+  for (const mac of ['not-a-mac', '00:00:00:00:00:00', 'FF:FF:FF:FF:FF:FF']) {
+    assert.equal(parseMacFromSlipData(frame(protobufMessageField(8, Buffer.from(mac)))), undefined);
+  }
+  const valid = frame(protobufMessageField(8, Buffer.from('AA:BB:CC:DD:EE:FF')));
+  assert.equal(parseMacFromSlipData(Buffer.concat([frame(remote), valid])), 'AA:BB:CC:DD:EE:FF');
+}
+
 function testCapabilitySuggestionsOnlyHideUnsupportedOptions() {
   const suggestions = suggestCapabilityConfig({
     hasTempSensor: false,
@@ -1204,6 +1225,7 @@ async function testNightLightFeedbackTimeoutAndDisconnect() {
 }
 
 async function main() {
+  testMacDiscoveryReadsOnlyFanIdentity();
   await testNightLightControlsPreserveEnableAndIntensity();
   await testNightLightInitialEnableAndZeroIntensityScene();
   await testNightLightFeedbackTimeoutAndDisconnect();

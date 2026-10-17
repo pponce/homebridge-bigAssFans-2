@@ -250,9 +250,8 @@ function createFanCard(fan, index) {
   title.textContent = fan.name || `Fan ${index + 1}`;
 
   const status = document.createElement("span");
-  const valid = getFanErrors(fan).length === 0;
-  status.className = `pill ${valid ? "good" : "warn"}`;
-  status.textContent = valid ? "Ready" : "Needs details";
+  status.className = "pill warn";
+  status.textContent = "Not tested";
 
   header.append(title, status);
   card.appendChild(header);
@@ -261,11 +260,34 @@ function createFanCard(fan, index) {
   identityGrid.className = "settings-grid";
   identityGrid.append(
     createTextField(index, "name", "Fan name", fan.name || "", "Office Fan", "Display name for this fan in HomeKit."),
-    createTextField(index, "ip", "Fan IP address or hostname", fan.ip || "", "192.168.1.150 or fan.local", "IP address, DNS hostname, or mDNS .local hostname."),
-    createTextField(index, "mac", "MAC address", fan.mac || "", "20:F8:5E:00:00:00", "MAC address from the Big Ass Fans app Wi-Fi settings."),
-    createNumberField(index, "probeFrequency", "Probe frequency (ms)", getValue(fan, "probeFrequency"), "Keep-alive and state refresh interval. Use 0 to disable probing.")
+    createTextField(index, "ip", "Fan IP address or hostname", fan.ip || "", "192.168.1.150 or fan.local", "IP address, DNS hostname, or mDNS .local hostname.")
   );
   card.appendChild(identityGrid);
+
+  const connectionActions = document.createElement("div");
+  connectionActions.className = "actions";
+  const test = document.createElement("button");
+  test.type = "button";
+  test.className = "secondary";
+  test.textContent = "Test Connection";
+  test.addEventListener("click", () => {
+    testConnection(index, test).catch(() => {
+      restoreButton(test, "Test Connection");
+      showToast("error", "Connection test failed.");
+    });
+  });
+  connectionActions.append(test);
+  const connectionHelp = document.createElement("p");
+  connectionHelp.className = "help compact-help";
+  connectionHelp.textContent = "Enter a name and IP address, then test the connection to detect supported features and fill in the MAC address. Choose your options below, then save.";
+  const connectionResult = document.createElement("p");
+  connectionResult.className = "help compact-help connection-result";
+  card.append(connectionActions, connectionHelp, connectionResult);
+
+  card.appendChild(createSettingSection("Fan identity and connection", [
+    createTextField(index, "mac", "MAC address", fan.mac || "", "20:F8:5E:00:00:00", "Filled automatically when reported by the fan. If unavailable, enter it from the BAF app Wi-Fi settings before saving."),
+    createNumberField(index, "probeFrequency", "Probe frequency (ms)", getValue(fan, "probeFrequency"), "Keep-alive and state refresh interval. Use 0 to disable probing.")
+  ]));
 
   const tuckedCapabilityFields = [];
   const lightsHidden = getValue(fan, "noLights") === true;
@@ -345,22 +367,12 @@ function createFanCard(fan, index) {
 
   const actions = document.createElement("div");
   actions.className = "actions";
-  const test = document.createElement("button");
-  test.type = "button";
-  test.className = "secondary";
-  test.textContent = "Test Connection";
-  test.addEventListener("click", () => {
-    testConnection(index, test).catch(() => {
-      showToast("error", "Connection test failed.");
-    });
-  });
-
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "danger";
   remove.textContent = "Remove Fan";
   remove.addEventListener("click", () => removeFan(index));
-  actions.append(test, remove);
+  actions.append(remove);
   card.appendChild(actions);
 
   card.addEventListener("input", () => {
@@ -378,6 +390,7 @@ function createFanCard(fan, index) {
     renderDiagnostics();
   });
 
+  refreshFanCardStatus(card);
   return card;
 }
 
@@ -584,9 +597,18 @@ function refreshFanCardStatus(card) {
     title.textContent = fan.name || `Fan ${index + 1}`;
   }
   if (pill) {
-    const valid = getFanErrors(fan).length === 0;
-    pill.className = `pill ${valid ? "good" : "warn"}`;
-    pill.textContent = valid ? "Ready" : "Needs details";
+    const live = state.diagnostics.devices[index]?.result;
+    pill.className = `pill ${live?.ok ? "good" : "warn"}`;
+    pill.textContent = live ? (live.capabilities ? "Features detected" : live.ok ? "Connected" : "Check connection") : "Not tested";
+    const details = card.querySelector(".connection-result");
+    if (details) {
+      const macMismatch = live?.mac && fan.mac && live.mac.toLowerCase() !== fan.mac.toLowerCase();
+      details.textContent = live
+        ? `${live.message || "Fan responded."} ${live.capabilities ? describeLiveCapabilities(live) + ". " : ""}${macMismatch
+          ? "The reported MAC differs from the configured MAC. The existing MAC has been kept; check the IP and MAC before saving."
+          : !fan.mac ? "MAC address was not reported. Enter it below before saving." : ""}`
+        : "";
+    }
   }
 }
 
@@ -832,24 +854,37 @@ async function testConnection(index, button) {
     showToast("error", "Fan not found.");
     return;
   }
+  if (!fan.name || !fan.ip) {
+    showToast("warning", "Enter a fan name and IP address or hostname before testing.");
+    return;
+  }
 
+  const card = button.closest(".fan-card");
   setButtonBusy(button, "Testing...");
   const result = await request("/fan/test-connection", { fan });
   restoreButton(button, "Test Connection");
+
+  updateConfigFromForm(false);
+  if (elements.fansList.querySelector(`[data-fan-index="${index}"]`) !== card || state.config.fans[index]?.ip !== fan.ip) {
+    return; // The fan was removed, replaced, or its address changed during the test.
+  }
 
   if (!result.ok) {
     showToast("error", result.message || "Connection test failed.");
     return;
   }
 
+  const currentFan = state.config.fans[index];
+  if (!currentFan.mac && isValidMac(result.result?.mac)) {
+    currentFan.mac = result.result.mac;
+  }
   state.diagnostics.devices[index] = {
     index,
-    fan,
+    fan: { ...currentFan },
     result: result.result,
   };
   state.diagnostics.generatedAt = result.result?.checkedAt;
-  renderDiagnostics();
-  refreshFanCardStatusForIndex(index);
+  render();
 
   if (result.result?.ok) {
     showToast("success", `${fan.name || "Fan"} responded.`);
@@ -1078,6 +1113,9 @@ function describeLiveCapabilities(live) {
 }
 
 function describeLiveExposure(live) {
+  if (live?.settingsChanged) {
+    return "Options changed since the test. Test again to refresh this comparison.";
+  }
   if (!live?.capabilitySummary) {
     return "not checked yet";
   }
@@ -1097,6 +1135,9 @@ function describeLiveExposure(live) {
 }
 
 function describeLiveGuidance(live) {
+  if (live?.settingsChanged) {
+    return "Detected features are retained. Test again if you want updated suggestions for your selected options.";
+  }
   if (Array.isArray(live?.suggestionsApplied) && live.suggestionsApplied.length > 0) {
     return `Applied suggested settings: ${live.suggestionsApplied.join(", ")}. Save settings and restart the child bridge to remove HomeKit services.`;
   }
@@ -1169,8 +1210,12 @@ function highlightSuggestedFields(index, suggestions) {
 }
 
 function clearLiveDiagnostic(index) {
-  if (state.diagnostics.devices[index]) {
+  const diagnostic = state.diagnostics.devices[index];
+  if (diagnostic && diagnostic.fan.ip !== state.config.fans[index]?.ip) {
     state.diagnostics.devices[index] = undefined;
+  } else if (diagnostic?.result) {
+    diagnostic.result.settingsChanged = true;
+    diagnostic.result.capabilitySuggestions = [];
   }
 }
 
