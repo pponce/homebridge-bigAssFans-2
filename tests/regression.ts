@@ -7,6 +7,12 @@ import { __test__, BigAssFans_i6PlatformAccessory } from '../src/platformAccesso
 import { parseCapabilitiesFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
 import { emptyNightLightState, NightLightCoordinator, nightLightCommand, type NightLightState } from '../src/nightlight';
 
+class FakeHapStatusError extends Error {
+  constructor(public readonly hapStatus: number) {
+    super(`HAP Status Error: ${hapStatus}`);
+  }
+}
+
 class FakeSocket extends EventEmitter {
   public writes: Buffer[] = [];
   public keepAlive = false;
@@ -309,7 +315,9 @@ function createTestServiceState() {
         },
         api: {
           updatePlatformAccessories: (accessories: FakeAccessory[]) => updatedAccessories.push(...accessories),
-          hap: { HapStatusError: Error, HAPStatus: { SERVICE_COMMUNICATION_FAILURE: 'No response' } },
+          // TypeScript can inline Homebridge's const enum. Keep this numeric so
+          // normal compilation and type-stripped test runs exercise the same status.
+          hap: { HapStatusError: FakeHapStatusError, HAPStatus: { SERVICE_COMMUNICATION_FAILURE: -70402 } },
         },
       },
     },
@@ -1113,7 +1121,8 @@ async function testNightLightInitialEnableAndZeroIntensityScene() {
     __test__.makeServices(state);
     const light = state.nightLight!;
     const socket = state.client as unknown as FakeSocket;
-    await assert.rejects(state.setStandbyLEDOnState(true), /No response/);
+    await assert.rejects(state.setStandbyLEDOnState(true), (error: unknown) =>
+      error instanceof FakeHapStatusError && error.hapStatus === -70402);
     // Empty StandbyLed is disabled, zero intensity and custom black.
     __test__.onData(state, nightLightReportFrame([]));
     const on = state.setStandbyLEDOnState(true);
