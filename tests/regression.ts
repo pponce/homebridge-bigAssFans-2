@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as net from 'net';
+import { mock } from 'node:test';
 
 import { __test__, BigAssFans_i6PlatformAccessory } from '../src/platformAccessory';
 import { parseCapabilitiesFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
+import { emptyNightLightState, NightLightCoordinator, nightLightCommand, type NightLightState } from '../src/nightlight';
 
 class FakeSocket extends EventEmitter {
   public writes: Buffer[] = [];
@@ -84,7 +86,7 @@ class FakeService {
 
 class FakeAccessory {
   public services: FakeService[] = [];
-  public context: { device: object; whiteLightMemory?: { down?: number; up?: number } } = { device: {} };
+  public context: { device: object; whiteLightMemory?: { down?: number; up?: number }; nightLightBrightness?: number } = { device: {} };
 
   constructor() {
     this.services.push(new FakeService('AccessoryInformation'));
@@ -307,6 +309,7 @@ function createTestServiceState() {
         },
         api: {
           updatePlatformAccessories: (accessories: FakeAccessory[]) => updatedAccessories.push(...accessories),
+          hap: { HapStatusError: Error, HAPStatus: { SERVICE_COMMUNICATION_FAILURE: 'No response' } },
         },
       },
     },
@@ -350,7 +353,7 @@ function testGetVarintSupportsLargeValues() {
 }
 
 function testStandbyLEDColorMessageUsesVarints() {
-  const message = __test__.buildStandbyLEDColorMessage(128, 255, 64);
+  const message = nightLightCommand({ enabled: true, brightness: 35, preset: 0, red: 128, green: 255, blue: 64 });
   const hex = Buffer.from(message).toString('hex');
   assert.match(hex, /208001/);
   assert.match(hex, /28ff01/);
@@ -887,7 +890,6 @@ function createDualLightTestState() {
     downlightStates: { On: false, Brightness: 1 },
     uplightStates: { On: false, Brightness: 1 },
     standbyLEDStates: { On: false, Brightness: 0, Hue: 0, Saturation: 0 },
-    standbyRGB: [0, 0, 0],
   }) as BigAssFans_i6PlatformAccessory;
   state.capabilities.hasLight = true;
   state.capabilities.hasUplight = true;
@@ -994,7 +996,7 @@ async function testHomeKitAckDoesNotTurnZeroBrightnessBackOn() {
 }
 
 function testStandbyMessageEnvelope() {
-  const message = Buffer.from(__test__.buildStandbyLEDColorMessage(128, 255, 64));
+  const message = Buffer.from(nightLightCommand({ enabled: true, brightness: 35, preset: 0, red: 128, green: 255, blue: 64 }));
   // ApiMessage -> Job -> repeated Property -> StandbyLed. There must be no protobuf group delimiters.
   let bytes: Buffer = message;
   for (const expectedKey of [0x12, 0x12, 0x1a, 0x29a]) {
@@ -1008,7 +1010,194 @@ function testStandbyMessageEnvelope() {
   assert.equal(message[0], 0x12);
 }
 
+/** Decode the actual socket write and require a complete six-field StandbyLed. */
+function decodeNightLightWrite(frame: Buffer) {
+  assert.equal(frame[0], 0xc0);
+  assert.equal(frame.at(-1), 0xc0);
+  let bytes = __test__.unstuff(frame.subarray(1, -1));
+  for (const expectedKey of [0x12, 0x12, 0x1a, 0x29a]) {
+    let key: number;
+    let length: number;
+    [bytes, key] = __test__.getVarint(bytes);
+    assert.equal(key, expectedKey);
+    [bytes, length] = __test__.getVarint(bytes);
+    assert.equal(bytes.length, length);
+  }
+  const fields: Record<number, number> = {};
+  while (bytes.length) {
+    let key: number;
+    let value: number;
+    [bytes, key] = __test__.getVarint(bytes);
+    [bytes, value] = __test__.getVarint(bytes);
+    assert.equal(key & 7, 0);
+    fields[key >> 3] = value;
+  }
+  assert.deepEqual(Object.keys(fields), ['1', '2', '3', '4', '5', '6']);
+  return fields;
+}
+
+function nightLightReportFrame(fields: Array<[number, number]>) {
+  const inner = fields.flatMap(([field, value]) => [...__test__.varint_encode(field * 8), ...__test__.varint_encode(value)]);
+  const property = [0x9a, 0x05, ...__test__.varint_encode(inner.length), ...inner];
+  const properties = [0x12, ...__test__.varint_encode(property.length), ...property];
+  const update = [0x22, ...__test__.varint_encode(properties.length), ...properties];
+  const root = [0x12, ...__test__.varint_encode(update.length), ...update];
+  const escaped = root.flatMap(byte => byte === 0xc0 ? [0xdb, 0xdc] : byte === 0xdb ? [0xdb, 0xdd] : [byte]);
+  return Buffer.from([0xc0, ...escaped, 0xc0]);
+}
+
+async function testNightLightControlsPreserveEnableAndIntensity() {
+  const { state, accessory } = createDualLightTestState();
+  __test__.makeServices(state);
+  // BAF enables the red night light at 35%; zero channels are omitted in the report.
+  __test__.onData(state, nightLightReportFrame([[1, 1], [2, 1], [3, 35]]));
+  const light = state.nightLight!;
+  const socket = state.client as unknown as FakeSocket;
+  const service = accessory.getServiceById('Lightbulb', 'light-3')!;
+  assert.equal(service.values.get('On'), true);
+  const writesBeforeColor = socket.writes.length;
+  const hue = state.setStandbyLEDHue(240);
+  const saturation = state.setStandbyLEDSaturation(100);
+  light.flush();
+  await Promise.all([hue, saturation]);
+  assert.equal(socket.writes.length, writesBeforeColor + 1, 'Hue and saturation should share one command');
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 0, 2: 1, 3: 35, 4: 0, 5: 0, 6: 255 });
+
+  const intensity = state.setStandbyLEDBrightness(60);
+  light.flush();
+  await intensity;
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 0, 2: 1, 3: 60, 4: 0, 5: 0, 6: 255 });
+  __test__.onData(state, nightLightReportFrame([[2, 1], [3, 60], [6, 255]]));
+  assert.equal(accessory.context.nightLightBrightness, 60);
+
+  const off = state.setStandbyLEDOnState(false);
+  light.flush();
+  await off;
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 0, 2: 0, 3: 60, 4: 0, 5: 0, 6: 255 });
+  // A disabled report can omit enabled and intensity; both must reset to zero.
+  __test__.onData(state, nightLightReportFrame([[6, 255]]));
+  assert.equal(service.values.get('On'), false);
+  assert.equal(light.state.brightness, 0);
+  const on = state.setStandbyLEDOnState(true);
+  light.flush();
+  await on;
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 0, 2: 1, 3: 60, 4: 0, 5: 0, 6: 255 });
+
+  // The BAF app changes its preset/enable while a HomeKit command awaits feedback.
+  const writes = socket.writes.length;
+  __test__.onData(state, nightLightReportFrame([[1, 2], [3, 20]]));
+  assert.equal(service.values.get('On'), false);
+  assert.equal(service.values.get('Brightness'), 20);
+  assert.equal(service.values.get('Hue'), 106);
+  assert.equal(socket.writes.length, writes, 'A BAF report must not cause an outgoing command');
+  const nextOn = state.setStandbyLEDOnState(true);
+  light.flush();
+  await nextOn;
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 2, 2: 1, 3: 20, 4: 0, 5: 0, 6: 0 });
+  const scene = [state.setStandbyLEDOnState(false), state.setStandbyLEDBrightness(15),
+    state.setStandbyLEDHue(0), state.setStandbyLEDSaturation(50)];
+  light.flush();
+  await Promise.all(scene);
+  assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 0, 2: 0, 3: 15, 4: 255, 5: 128, 6: 128 });
+  const colorWhileOff = state.setStandbyLEDHue(120);
+  light.flush();
+  await colorWhileOff;
+  assert.equal(decodeNightLightWrite(socket.writes.at(-1)!)[2], 0, 'Color alone must not override Off');
+  light.disconnect();
+  state.whiteLight!.disconnect();
+}
+
+async function testNightLightInitialEnableAndZeroIntensityScene() {
+  for (const zeroFirst of [false, true]) {
+    const { state, accessory } = createDualLightTestState();
+    __test__.makeServices(state);
+    const light = state.nightLight!;
+    const socket = state.client as unknown as FakeSocket;
+    await assert.rejects(state.setStandbyLEDOnState(true), /No response/);
+    // Empty StandbyLed is disabled, zero intensity and custom black.
+    __test__.onData(state, nightLightReportFrame([]));
+    const on = state.setStandbyLEDOnState(true);
+    light.flush();
+    await on;
+    assert.deepEqual(decodeNightLightWrite(socket.writes.at(-1)!), { 1: 7, 2: 1, 3: 25, 4: 255, 5: 255, 6: 255 });
+    assert.equal(accessory.context.nightLightBrightness, undefined, 'Do not persist unconfirmed fallback intensity');
+    const service = accessory.getServiceById('Lightbulb', 'light-3')!;
+    const writes = socket.writes.length;
+    const changes: Array<[string, boolean | number]> = [['On', true], ['Brightness', 0]];
+    if (zeroFirst) {
+      changes.reverse();
+    }
+    const pending = changes.map(([key, value]) => Promise.resolve(service.setters.get(key)!(value))
+      .then(() => service.updateCharacteristic(key, value)));
+    light.flush();
+    await Promise.all(pending);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(socket.writes.length, writes + 1);
+    const command = decodeNightLightWrite(socket.writes.at(-1)!);
+    assert.equal(command[2], 0);
+    assert.equal(command[3], 0);
+    assert.equal(service.values.get('On'), false, 'HAP acknowledgements must not undo the coordinated Off');
+    light.disconnect();
+    state.whiteLight!.disconnect();
+  }
+}
+
+async function testNightLightFeedbackTimeoutAndDisconnect() {
+  const commands: NightLightState[] = [];
+  const warnings: string[] = [];
+  let queries = 0;
+  let fail = false;
+  const light = new NightLightCoordinator(45, state => {
+    if (fail) {
+      throw new Error('Socket failed');
+    }
+    commands.push(state);
+  }, () => { queries++; }, () => undefined, message => warnings.push(message));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    light.report({ ...emptyNightLightState(), preset: 3 });
+    const firstOn = light.setPower(true);
+    light.flush();
+    await firstOn;
+    assert.equal(commands[0].brightness, 45, 'Restore confirmed brightness saved before a restart');
+    light.report({ ...light.state, brightness: 30 });
+    mock.timers.tick(3000);
+    assert.equal(queries, 0, 'A fan report cancels readback and timeout');
+    assert.equal(warnings.length, 0);
+
+    const brightness = light.setBrightness(70);
+    light.flush();
+    await brightness;
+    mock.timers.tick(250);
+    assert.equal(queries, 1);
+    mock.timers.tick(2250);
+    assert.equal(warnings.length, 1);
+    assert.equal(light.state.brightness, 30);
+    assert.equal(light.rememberedBrightness, 30);
+    assert.equal(commands.length, 2, 'Timeout must not retry a previous command');
+
+    fail = true;
+    const failed = assert.rejects(light.setPower(false), /Socket failed/);
+    light.flush();
+    await failed;
+    assert.equal(light.state.enabled, true, 'A failed socket write must not change cached state');
+    const disconnected = assert.rejects(light.setBrightness(90), /disconnected/);
+    light.disconnect();
+    await disconnected;
+    mock.timers.tick(3000);
+    assert.equal(commands.length, 2);
+    assert.equal(queries, 1);
+    await assert.rejects(light.setPower(true), /Waiting for the fan/);
+  } finally {
+    light.disconnect();
+    mock.timers.reset();
+  }
+}
+
 async function main() {
+  await testNightLightControlsPreserveEnableAndIntensity();
+  await testNightLightInitialEnableAndZeroIntensityScene();
+  await testNightLightFeedbackTimeoutAndDisconnect();
   await testExternalLightReportWinsDuringHomeKitWrite();
   await testHomeKitAckDoesNotTurnZeroBrightnessBackOn();
   testCoordinatedServiceLifecycleAndFragmentedReports();

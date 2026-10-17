@@ -43,6 +43,7 @@ export interface BigAssFansPlatformConfig extends PlatformConfig {
 export interface BigAssFansAccessoryContext {
   device: BigAssFansDeviceConfig;
   whiteLightMemory?: { down?: number; up?: number };
+  nightLightBrightness?: number;
 }
 
 export interface BigAssFansPlatformContext {
@@ -51,3 +52,4 @@ export interface BigAssFansPlatformContext {
   readonly log: Logger;
   readonly api: API;
 }
+

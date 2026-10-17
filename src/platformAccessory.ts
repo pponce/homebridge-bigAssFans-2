@@ -2,7 +2,8 @@
 
 import * as net from 'net';
 import type { Service, PlatformAccessory, CharacteristicValue, WithUUID } from 'homebridge';
-import { DualLightCoordinator, lightCommand, rgbToHueSaturation, type WhiteLightState } from './lighting';
+import { DualLightCoordinator, lightCommand, type WhiteLightState } from './lighting';
+import { emptyNightLightState, NightLightCoordinator, nightLightColor, nightLightCommand, type NightLightState } from './nightlight';
 import type { BigAssFansAccessoryContext, BigAssFansPlatformContext, LightDetectionOverride } from './types';
 import {
   capabilityKeys,
@@ -57,9 +58,8 @@ export class BigAssFans_i6PlatformAccessory {
   public lightModeServices: Map<number, Service> = new Map();
   public dualLightModeControl: 'exclusive' | 'channels' | 'legacy' = 'exclusive';
   public whiteLightReport: Partial<WhiteLightState> = {};
-  public standbyRGB = [0, 0, 0];
-  public standbyPreset = 0;
-  public standbyRGBDirty = false;
+  public nightLight?: NightLightCoordinator;
+  public nightLightReport?: NightLightState;
   public capabilitiesEstablished = false;
   public capabilities: Capabilities = createDefaultCapabilities();
 
@@ -212,7 +212,10 @@ export class BigAssFans_i6PlatformAccessory {
     this.MAC = device.mac;
     this.Name = device.name;
     this.dualLightModeControl = device.dualLightModeControl ?? 'exclusive';
-    this.platform.api.on('shutdown', () => this.whiteLight?.disconnect());
+    this.platform.api.on('shutdown', () => {
+      this.whiteLight?.disconnect();
+      this.nightLight?.disconnect();
+    });
 
     // defaults and enumeration of debugging keys
     this.debugLevels['capabilities']      = 0;
@@ -766,10 +769,7 @@ export class BigAssFans_i6PlatformAccessory {
   // On means enabled, off means disabled
   async setStandbyLEDEnabledSwitchOnState(value: CharacteristicValue) {
     debugLog(this, ['newcode', 'characteristics'], [1, 3], 'Set Characteristic StandbyLED Enabled Switch On -> ' + value);
-    this.standbyLEDEnabledSwitchOn = value as boolean;
-    this.standbyLEDStates.On = Boolean(value);
-    clientWrite(this.client,
-      [0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x10, (this.standbyLEDEnabledSwitchOn ? 0x01 : 0x00)], this, true);
+    await writeNightLight(this, light => light.setPower(Boolean(value)));
   }
 
   async getStandbyLEDEnabledSwitchOnState(): Promise<CharacteristicValue> {
@@ -781,7 +781,6 @@ export class BigAssFans_i6PlatformAccessory {
   // On means the standby feature is enabled; the fan decides when it illuminates.
   async setStandbyLEDOnState(value: CharacteristicValue) {
     await this.setStandbyLEDEnabledSwitchOnState(value);
-    this.standbyLEDStates.On = Boolean(value);
   }
 
   async getStandbyLEDOnState(): Promise<CharacteristicValue> {
@@ -790,9 +789,7 @@ export class BigAssFans_i6PlatformAccessory {
   }
 
   async setStandbyLEDBrightness(value: CharacteristicValue) {
-    this.standbyLEDStates.Brightness = value as number;
-    clientWrite(this.client,
-      [0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x18, this.standbyLEDStates.Brightness], this, true);
+    await writeNightLight(this, light => light.setBrightness(Number(value)));
   }
 
   async getStandbyLEDBrightness(): Promise<CharacteristicValue> {
@@ -802,17 +799,7 @@ export class BigAssFans_i6PlatformAccessory {
   }
 
   async setStandbyLEDHue(value: CharacteristicValue) {
-    this.standbyLEDStates.Hue = value as number;
-    debugLog(this, ['newcode', 'characteristics'], [1, 3], `Set Characteristic StandbyLED Hue -> ${this.standbyLEDStates.Hue}`);
-
-    // convert hue/saturation/brightness to color
-    const rgb = HSVtoRGB(this.standbyLEDStates.Hue, this.standbyLEDStates.Saturation, 100);
-    const red = Math.round(rgb[0]);
-    const green = Math.round(rgb[1]);
-    const blue = Math.round(rgb[2]);
-
-    // send preset: custom, and rgb values (use varints for RGB values >= 128)
-    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this, true);
+    await writeNightLight(this, light => light.setHue(Number(value)));
   }
 
   async getStandbyLEDHue(): Promise<CharacteristicValue> {
@@ -821,18 +808,7 @@ export class BigAssFans_i6PlatformAccessory {
   }
 
   async setStandbyLEDSaturation(value: CharacteristicValue) {
-    this.standbyLEDStates.Saturation = value as number;
-    debugLog(this, ['newcode', 'characteristics'], [1, 3],
-      `Set Characteristic StandbyLED Saturation -> ${this.standbyLEDStates.Saturation}`);
-
-    // convert hue/saturation/brightness to color
-    const rgb = HSVtoRGB(this.standbyLEDStates.Hue, this.standbyLEDStates.Saturation, 100);
-    const red = Math.round(rgb[0]);
-    const green = Math.round(rgb[1]);
-    const blue = Math.round(rgb[2]);
-
-    // send preset: custom, and rgb values (use varints for RGB values >= 128)
-    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this, true);
+    await writeNightLight(this, light => light.setSaturation(Number(value)));
   }
 
   async getStandbyLEDSaturation(): Promise<CharacteristicValue> {
@@ -965,9 +941,17 @@ function makeStandbyLED(pA: BAF) {
   const capitalizeName = pA.Name[0] === pA.Name[0].toUpperCase();
   setName(pA, pA.standbyLEDBulbService, pA.Name + (capitalizeName ? ' Night Light' : ' night light'));
 
-  // On/Off is actually tied to Enabled
-  // onSet - ignore
-  // onGet returns On if Enabled, else Off
+  if (!pA.nightLight) {
+    pA.nightLight = new NightLightCoordinator(
+      pA.accessory.context.nightLightBrightness,
+      state => clientWrite(pA.client, nightLightCommand(state), pA, true),
+      () => sendLightStateRefreshRequest(pA),
+      () => syncNightLight(pA),
+      message => pA.platform.log.warn(pA.Name + ' - ' + message),
+    );
+  }
+
+  // On enables the feature with a usable intensity; Off disables it.
   pA.standbyLEDBulbService.getCharacteristic(pA.platform.Characteristic.On)
     .onSet(pA.setStandbyLEDOnState.bind(pA))
     .onGet(pA.getStandbyLEDOnState.bind(pA));
@@ -1007,10 +991,45 @@ function lightTemperatureMax(s: string, pA: BAF) {
   }
 }
 
-function resetStandbyRGB(_s: string, pA: BAF) {
-  pA.standbyRGB = [0, 0, 0]; // Protobuf omits zero-valued channels in a full StandbyLed message.
-  pA.standbyPreset = 0;
-  pA.standbyRGBDirty = true;
+function resetStandbyReport(_s: string, pA: BAF) {
+  // A StandbyLed report is a complete value. Omitted protobuf scalars are zero,
+  // including enabled=false and percent=0, not just the custom RGB channels.
+  pA.nightLightReport = emptyNightLightState();
+}
+
+async function writeNightLight(pA: BAF, action: (light: NightLightCoordinator) => Promise<void>) {
+  try {
+    if (!pA.nightLight || !pA.client || pA.client.destroyed || !pA.client.writable) {
+      throw new Error('Fan is not connected');
+    }
+    await action(pA.nightLight);
+    // Restore the coordinated values after HAP acknowledges each scene setter.
+    setTimeout(() => syncNightLight(pA), 0);
+  } catch (error) {
+    pA.platform.log.warn(pA.Name + ' night light: ' + (error instanceof Error ? error.message : String(error)));
+    throw new pA.platform.api.hap.HapStatusError(pA.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+  }
+}
+
+function syncNightLight(pA: BAF) {
+  const light = pA.nightLight;
+  if (!light?.ready) {
+    return;
+  }
+  const state = light.view;
+  const [hue, saturation] = nightLightColor(state);
+  const c = pA.platform.Characteristic;
+  pA.standbyLEDEnabledSwitchOn = state.enabled;
+  Object.assign(pA.standbyLEDStates, { On: state.enabled, Brightness: state.brightness, Hue: hue, Saturation: saturation });
+  pA.standbyLEDEnabledSwitchService?.updateCharacteristic(c.On, state.enabled);
+  pA.standbyLEDBulbService?.updateCharacteristic(c.On, state.enabled);
+  pA.standbyLEDBulbService?.updateCharacteristic(c.Brightness, state.brightness);
+  pA.standbyLEDBulbService?.updateCharacteristic(c.Hue, hue);
+  pA.standbyLEDBulbService?.updateCharacteristic(c.Saturation, saturation);
+  if (light.rememberedBrightness > 0 && pA.accessory.context.nightLightBrightness !== light.rememberedBrightness) {
+    pA.accessory.context.nightLightBrightness = light.rememberedBrightness;
+    pA.platform.api.updatePlatformAccessories([pA.accessory]);
+  }
 }
 
 function requireWhiteLight(pA: BAF) {
@@ -1456,11 +1475,16 @@ function makeServices(pA: BAF) {
     makeStandbyLED(pA);
     if (coordinated) {
       zapService(pA, 'standbyEnabledSwitch', ['switch-7']);
+      pA.standbyLEDEnabledSwitchService = undefined!;
     }
   } else {
     debugLog(pA, 'newcode', 1, 'zap standbyEnabledSwitch and standbyLED');
     zapService(pA, 'standbyEnabledSwitch', ['switch-7'], [{ serviceType: pA.platform.Service.Switch, subtype: 'switch-7' }]);
     zapService(pA, 'standbyLED', ['light-3'], [{ serviceType: pA.platform.Service.Lightbulb, subtype: 'light-3' }]);
+    pA.nightLight?.disconnect();
+    pA.nightLight = undefined;
+    pA.standbyLEDEnabledSwitchService = undefined!;
+    pA.standbyLEDBulbService = undefined!;
   }
 
   debugLog(pA, 'newcode', 1, `enableIncrementalButtons is ${pA.enableIncrementalButtons}`);
@@ -1615,6 +1639,7 @@ function networkSetup(pA: BAF) {
     }
     pA.client = undefined;
     pA.whiteLight?.disconnect();
+    pA.nightLight?.disconnect();
     clearRotationSpeedDiagnostics(pA);
 
     setTimeout(() => {
@@ -2344,87 +2369,38 @@ function lightOccupancyDetectedState(s: string, pA:BAF) {
 }
 
 function standbyColorPreset(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    debugLog(pA, 'newcode', 1, `standbyColorPreset(): ${s}`);
-    const hsvPresets = [
-    // hue  sat  val
-      [  0,   0,   0],  // 0 - custom
-      [  0, 100, 100],  // 1 - red
-      [106, 100, 100],  // 2 - green
-      [220, 100, 100],  // 3 - blue
-      [180, 100, 100],  // 4 - teal
-      [ 60, 100, 100],  // 5 - yellow
-      [280, 100, 100],  // 6 - violet
-      [  0,   0, 100],  // 7 - white
-      [ 30, 100, 100],  // 8 - orange
-      [300, 100, 100],   // 9 - pink
-    ];
-
-    // whether or not there's currently a standbyLEDBulbService, we want to store the color.
-    const n = Number(s);
-    if (n < 0 || n >= hsvPresets.length || !hsvPresets[n]) {
-      debugLog(pA, 'redflags', 1, `standbyColorPreset: invalid preset index ${n}, ignoring`);
-      return;
-    }
-    pA.standbyPreset = n;
-    if (n === 0) {
-      return; // Custom colors come from RGB, not the placeholder preset.
-    }
-    const hue = hsvPresets[n][0];
-    const saturation = hsvPresets[n][1];
-    // const value = hsvPresets[n][2];
-
-    pA.standbyLEDStates.Hue = hue;
-    pA.standbyLEDStates.Saturation = saturation;
-
-    if (pA.standbyLEDBulbService) {
-      pA.standbyLEDBulbService.updateCharacteristic(pA.platform.Characteristic.Hue, hue);
-      pA.standbyLEDBulbService.updateCharacteristic(pA.platform.Characteristic.Saturation, saturation);
-    }
+  if (pA.nightLightReport) {
+    pA.nightLightReport.preset = Number(s);
   }
 }
 
 function standbyLEDEnable(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    debugLog(pA, ['newcode', 'characteristics'], [1, 3], `standbyLEDEnable(): ${s}`);
-    pA.standbyLEDEnabledSwitchOn = Boolean(Number(s));
-    // should we ignore the update if it's not changing state?
-    debugLog(pA, ['newcode', 'characteristics'], [1, 3], 'update standbyLEDEnabledSwitchOn: ' + pA.standbyLEDEnabledSwitchOn);
-    pA.standbyLEDStates.On = pA.standbyLEDEnabledSwitchOn;
-    pA.standbyLEDEnabledSwitchService?.updateCharacteristic(pA.platform.Characteristic.On, pA.standbyLEDEnabledSwitchOn);
-    pA.standbyLEDBulbService?.updateCharacteristic(pA.platform.Characteristic.On, pA.standbyLEDEnabledSwitchOn);
+  if (pA.nightLightReport) {
+    pA.nightLightReport.enabled = Boolean(Number(s));
   }
 }
 
 function standbyLEDPercent(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    debugLog(pA, 'newcode', 1, `standbyLEDPercent(): ${s}`);
-    pA.standbyLEDStates.Brightness = Number(s);
-    debugLog(pA, ['newcode', 'characteristics'], [1, 3], `update standbyLED Brightness: ${pA.standbyLEDStates.Brightness}`);
-    if (pA.standbyLEDBulbService) {
-      pA.standbyLEDBulbService.updateCharacteristic(pA.platform.Characteristic.Brightness, pA.standbyLEDStates.Brightness);
-    }
+  if (pA.nightLightReport) {
+    pA.nightLightReport.brightness = Math.max(0, Math.min(100, Number(s)));
   }
 }
 
 function standbyLEDRed(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    pA.standbyRGB[0] = Math.max(0, Math.min(255, Number(s)));
-    pA.standbyRGBDirty = true;
+  if (pA.nightLightReport) {
+    pA.nightLightReport.red = Math.max(0, Math.min(255, Number(s)));
   }
 }
 
 function standbyLEDGreen(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    pA.standbyRGB[1] = Math.max(0, Math.min(255, Number(s)));
-    pA.standbyRGBDirty = true;
+  if (pA.nightLightReport) {
+    pA.nightLightReport.green = Math.max(0, Math.min(255, Number(s)));
   }
 }
 
 function standbyLEDBlue(s: string, pA:BAF) {
-  if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
-    pA.standbyRGB[2] = Math.max(0, Math.min(255, Number(s)));
-    pA.standbyRGBDirty = true;
+  if (pA.nightLightReport) {
+    pA.nightLightReport.blue = Math.max(0, Math.min(255, Number(s)));
   }
 }
 
@@ -2489,23 +2465,6 @@ function varint_encode(n: number) : number[] {
   }
   a.push(n & 0x7F);
   return a;
-}
-
-/** Builds a standby LED color message with proper varint encoding for RGB values >= 128. */
-function buildStandbyLEDColorMessage(red: number, green: number, blue: number): number[] {
-  // inner payload: preset=custom(0), red, green, blue
-  const inner: number[] = [0x08, 0x00];  // preset = 0 (custom)
-  inner.push(0x20, ...varint_encode(red));
-  inner.push(0x28, ...varint_encode(green));
-  inner.push(0x30, ...varint_encode(blue));
-  // wrap in nested length-delimited fields: 0x9a 0x05 <len> <inner>
-  const field19: number[] = [0x9a, 0x05, ...varint_encode(inner.length), ...inner];
-  // 0x1a <len> <field19>
-  const field3: number[] = [0x1a, ...varint_encode(field19.length), ...field19];
-  // 0x12 <len> <field3>
-  const field2inner: number[] = [0x12, ...varint_encode(field3.length), ...field3];
-  // The outer envelope is the same as every other Job; clientWrite adds SLIP framing.
-  return [0x12, ...varint_encode(field2inner.length), ...field2inner];
 }
 
 function hexFormat(arg: Buffer | number) {
@@ -3123,10 +3082,7 @@ function buildFunStack(b:Buffer, pA: BAF): funCall[] {
               case 83: {  // standby LED - message: 1/color preset, 2/enabled, 3/percent, 4/red, 5/green, 6/blue
                 [b, length] = getVarint(b);
                 const remainingLength = getDelimitedMessageEnd(b, length, 'field 83 standby LED message');
-                // it seems we must assume the absence of enabled=1 means enabled=0 since turning off the night light (standbyLED)
-                // does not send a subfield 2 with a value of 0, but doesn't send subfield 2 at all.
-                let enabled = 0;
-                funStack.push([resetStandbyRGB, '']);
+                funStack.push([resetStandbyReport, '']);
                 while (b.length > remainingLength) {
                   [b, type, field] = getProtoElements(b);
                   debugLog(pA, 'protoparse', 1, '        field: ' + field);
@@ -3142,7 +3098,6 @@ function buildFunStack(b:Buffer, pA: BAF): funCall[] {
                       debugLog(pA, 'protoparse', 1, '          value: ' + v);
                       debugLog(pA, 'newcode', 1, `standby LED enabled: ${v}`);
                       funStack.push([standbyLEDEnable, String(v)]);
-                      enabled = v;
                       break;
                     case 3: // percent
                       [b, v] = getValue(b); // ignore
@@ -3174,11 +3129,6 @@ function buildFunStack(b:Buffer, pA: BAF): funCall[] {
                       b = doUnknownField(b, type, pA);
                       break;
                   }
-                }
-                // see comment above
-                if (! enabled) {
-                  debugLog(pA, 'newcode', 1, `buildFunStack(): "${String(enabled)}"`);
-                  funStack.push([standbyLEDEnable, String(enabled)]);
                 }
                 break;
               }
@@ -3772,14 +3722,10 @@ function finishLightReport(pA: BAF) {
   if (pA.whiteLight && Object.keys(pA.whiteLightReport).length > 0) {
     pA.whiteLight.report(pA.whiteLightReport);
   }
-  if (pA.standbyRGBDirty && pA.standbyPreset === 0) {
-    const [hue, saturation] = rgbToHueSaturation(pA.standbyRGB[0], pA.standbyRGB[1], pA.standbyRGB[2]);
-    pA.standbyLEDStates.Hue = hue;
-    pA.standbyLEDStates.Saturation = saturation;
-    pA.standbyLEDBulbService?.updateCharacteristic(pA.platform.Characteristic.Hue, hue);
-    pA.standbyLEDBulbService?.updateCharacteristic(pA.platform.Characteristic.Saturation, saturation);
+  if (pA.nightLightReport) {
+    pA.nightLight?.report(pA.nightLightReport);
+    pA.nightLightReport = undefined;
   }
-  pA.standbyRGBDirty = false;
 }
 
 function logCapabilitySummary(pA: BigAssFans_i6PlatformAccessory) {
@@ -3847,41 +3793,8 @@ function toDaysHoursMinutesString(minutes: number) : string {
   return `${days} ${days === 1 ? 'day' : 'days'} ${hours.toString().padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}`;
 }
 
-// https://www.npmjs.com/package/color-convert
-function HSVtoRGB(hue: number, saturation: number, brightness: number) {
-  const h = hue / 60;
-  const s = saturation / 100;
-  let v = brightness / 100;
-
-  const hi = Math.floor(h) % 6;
-
-  const f = h - Math.floor(h);
-  const p = 255 * v * (1 - s);
-  const q = 255 * v * (1 - (s * f));
-  const t = 255 * v * (1 - (s * (1 - f)));
-  v *= 255;
-
-  switch (hi) {
-    case 0:
-      return [v, t, p];
-    case 1:
-      return [q, v, p];
-    case 2:
-      return [p, v, t];
-    case 3:
-      return [p, q, v];
-    case 4:
-      return [t, p, v];
-    case 5:
-      return [v, p, q];
-  }
-  // this better be unreachable
-  return [0, 0, 0];
-}
-
 export const __test__ = {
   ProtobufParseError,
-  buildStandbyLEDColorMessage,
   fanOnState,
   fanRotationSpeed,
   flushFunQueue,

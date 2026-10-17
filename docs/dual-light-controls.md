@@ -26,7 +26,11 @@ If firmware rounds a request to a supported value, the returned value is shown i
 
 Capability detection uses the fan's local DeviceCapabilities report. The combined layout requires both white lights. A color-temperature capability by itself is not taken as evidence of a downlight when an uplight is present. Existing light-presence overrides remain available for firmware with incorrect reports.
 
-Night-light controls require `hasStandbyLED` and the **Show standby LED controls** option. On the combined layout, the color tile replaces the redundant enable switch. Its On state means the night-light feature is enabled; firmware decides when the standby light actually illuminates. Color, brightness and enable changes from the app are reflected in HomeKit.
+Night-light controls require `hasStandbyLED` and the **Show standby LED controls** option. On the combined layout, the color tile replaces the redundant enable switch. **Off disables the night-light feature. On enables it**, preserving its color and restoring the last confirmed nonzero intensity if needed. The first On uses 25% if no previous intensity is known, and white if the fan reports an unconfigured custom black color. Firmware still decides when the standby light actually illuminates.
+
+Enable, intensity, preset and RGB are sent together as a complete `StandbyLed` setting. Changing color or intensity must not clear the enable flag. HomeKit scene writes are combined into one update; explicit Off stays disabled, and zero intensity wins over a companion On command. Color-only changes preserve the current enable state. A positive intensity enables the feature unless the same scene explicitly turns it off.
+
+Fan reports from the BAF app replace the displayed settings immediately, including reports that disable the feature. Only confirmed intensity is saved for later restoration. A missing response triggers a readback and a diagnostic warning, never a retry of an older command. The controls wait for the fan's first night-light settings report after connecting.
 
 Temperature, humidity, occupancy and Eco services remain gated by their capability flags. Whoosh and Fan Auto can have named switches alongside native fan controls. Dim to Warm requires a color-temperature-capable light. Use **Test Connection** to inspect reported capabilities.
 
@@ -61,7 +65,7 @@ Automated tests cannot establish undocumented firmware behavior. Check these on 
 5. Change modes and brightness through the remote and BAF app; check all HomeKit switches update together.
 6. Run a scene that selects a mode and brightness together. Repeat with a different mode/level.
 7. Move HomeKit's white-temperature picker between the app's presets. Inspect the returned value and whether the hardware rounds it.
-8. Enable the night light, change its color in both apps, and confirm standby behavior when white lighting is on/off.
+8. With the white light off, disable the night light in BAF, then turn the HomeKit Night Light tile on. Confirm it becomes enabled in BAF. Change its color and intensity in HomeKit and confirm it stays enabled. Turn the tile off and confirm BAF shows disabled. Also change settings in BAF and confirm HomeKit follows, then check the fan's standby behavior with white lighting on/off.
 9. Restart Homebridge and confirm memory survives. Disconnect the fan and confirm commands fail, then recover after reconnection.
 10. Check another fan with one light and a device without a night light: neither should gain unsupported tiles.
 
