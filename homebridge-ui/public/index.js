@@ -17,6 +17,14 @@ const elements = {
 
 const state = {
   configs: [],
+  configLoaded: false,
+  configValid: false,
+  configSync: Promise.resolve(),
+  syncRevision: 0,
+  syncedRevision: 0,
+  stagedSignature: "",
+  syncedSignature: "",
+  saving: false,
   config: {
     platform: PLATFORM_ALIAS,
     name: DEFAULT_PLATFORM_NAME,
@@ -199,6 +207,7 @@ async function loadConfig() {
   );
 
   state.config = normalizeConfig(existingConfig);
+  state.configLoaded = true;
   render();
 }
 
@@ -710,6 +719,10 @@ function setBooleanOption(fan, key, value) {
 }
 
 async function saveSettings() {
+  if (!state.configLoaded || state.saving) {
+    return;
+  }
+
   const errors = updateConfigFromForm(true);
   if (errors.length > 0) {
     showToast("error", `Fix config first: ${errors[0]}.`);
@@ -726,19 +739,90 @@ async function saveSettings() {
     return;
   }
 
-  const configs = await window.homebridge.getPluginConfig();
-  const index = configs.findIndex((entry) => entry.platform === PLATFORM_ALIAS);
-  if (index >= 0) {
-    configs[index] = state.config;
-  } else {
-    configs.push(state.config);
+  state.saving = true;
+  refreshSaveButtons();
+  try {
+    stageConfig();
+    // Edits can arrive while a previous update is waiting for Homebridge.
+    // Wait for the latest queued draft before asking Homebridge to persist it.
+    let pending;
+    do {
+      pending = state.configSync;
+      await pending;
+    } while (pending !== state.configSync);
+
+    const latestErrors = updateConfigFromForm(true);
+    if (latestErrors.length > 0) {
+      showToast("error", `Fix config first: ${latestErrors[0]}.`);
+      updateConfigStatus();
+      return;
+    }
+    await window.homebridge.savePluginConfig();
+    showToast("success", "Settings saved.");
+    render();
+  } finally {
+    state.saving = false;
+    refreshSaveButtons();
+  }
+}
+
+function refreshSaveButtons() {
+  elements.saveSettingsTop.disabled = !state.configLoaded || state.saving;
+  const canSave = state.configLoaded && state.configValid && !state.saving &&
+    state.syncedRevision === state.syncRevision && JSON.stringify(state.config) === state.syncedSignature;
+  const method = canSave ? "enableSaveButton" : "disableSaveButton";
+  if (typeof window.homebridge?.[method] === "function") {
+    window.homebridge[method]();
+  }
+}
+
+function stageConfig() {
+  if (!state.configLoaded || typeof window.homebridge?.updatePluginConfig !== "function") {
+    refreshSaveButtons();
+    return;
   }
 
-  await window.homebridge.updatePluginConfig(configs);
-  await window.homebridge.savePluginConfig();
-  state.configs = configs;
-  showToast("success", "Settings saved.");
-  render();
+  const signature = JSON.stringify(state.config);
+  if (signature === state.stagedSignature) {
+    refreshSaveButtons();
+    return;
+  }
+  state.stagedSignature = signature;
+  const revision = ++state.syncRevision;
+  refreshSaveButtons();
+
+  // updatePluginConfig updates the parent modal's draft, not config.json.
+  // Both Save buttons must use this draft. Serialize updates so an older
+  // response cannot replace newer edits, and coalesce rapid input events.
+  state.configSync = state.configSync.catch(() => {}).then(async () => {
+    if (revision !== state.syncRevision) {
+      return;
+    }
+    const configs = await window.homebridge.getPluginConfig();
+    if (revision !== state.syncRevision) {
+      return;
+    }
+    const index = configs.findIndex((entry) => entry.platform === PLATFORM_ALIAS);
+    const snapshot = JSON.parse(signature);
+    if (index >= 0) {
+      configs[index] = snapshot;
+    } else {
+      configs.push(snapshot);
+    }
+    await window.homebridge.updatePluginConfig(configs);
+    state.configs = configs;
+    state.syncedSignature = signature;
+    state.syncedRevision = revision;
+    refreshSaveButtons();
+  });
+  state.configSync.catch((error) => {
+    if (revision === state.syncRevision) {
+      state.stagedSignature = "";
+      state.syncedSignature = "";
+      refreshSaveButtons();
+      showToast("error", `Could not update settings: ${error.message || "Request failed"}. Use Save Settings to retry.`);
+    }
+  });
 }
 
 async function testConnection(index, button) {
@@ -819,6 +903,8 @@ function restoreButton(button, text) {
 function updateConfigStatus() {
   const errors = updateConfigFromForm(false);
   const fanCount = state.config.fans.length;
+  state.configValid = fanCount > 0 && errors.length === 0;
+  stageConfig();
   elements.configStatus.classList.remove("good", "warn");
 
   if (fanCount === 0) {
@@ -1109,6 +1195,7 @@ function formatTimestamp(value) {
 }
 
 function init() {
+  refreshSaveButtons();
   loadConfig().catch(() => {
     showToast("error", "Failed to load current config.");
     render();
@@ -1139,3 +1226,4 @@ if (window.homebridge) {
 } else {
   document.addEventListener("DOMContentLoaded", init);
 }
+

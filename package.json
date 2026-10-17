@@ -30,7 +30,8 @@
   "main": "dist/index.js",
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "test:regression": "ts-node tests/regression.ts && ts-node tests/lighting.ts",
+    "test:regression": "ts-node tests/regression.ts && ts-node tests/lighting.ts && npm run test:ui",
+    "test:ui": "node --test tests/ui-config.js",
     "watch": "npm run build && npm link && nodemon",
     "build": "rimraf ./dist && tsc",
     "prepare": "npm run build",
@@ -61,3 +62,4 @@
     "@homebridge/plugin-ui-utils": "^2.2.3"
   }
 }
+
