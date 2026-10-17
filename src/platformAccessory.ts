@@ -767,8 +767,9 @@ export class BigAssFans_i6PlatformAccessory {
   async setStandbyLEDEnabledSwitchOnState(value: CharacteristicValue) {
     debugLog(this, ['newcode', 'characteristics'], [1, 3], 'Set Characteristic StandbyLED Enabled Switch On -> ' + value);
     this.standbyLEDEnabledSwitchOn = value as boolean;
+    this.standbyLEDStates.On = Boolean(value);
     clientWrite(this.client,
-      [0x0c, 0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x10, (this.standbyLEDEnabledSwitchOn ? 0x01 : 0x00), 0x0c], this);
+      [0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x10, (this.standbyLEDEnabledSwitchOn ? 0x01 : 0x00)], this, true);
   }
 
   async getStandbyLEDEnabledSwitchOnState(): Promise<CharacteristicValue> {
@@ -777,9 +778,7 @@ export class BigAssFans_i6PlatformAccessory {
     return isOn;
   }
 
-  // On/Off is actually tied to Enabled
-  // onSet - ignore
-  // onGet returns On if Enabled, else Off
+  // On means the standby feature is enabled; the fan decides when it illuminates.
   async setStandbyLEDOnState(value: CharacteristicValue) {
     await this.setStandbyLEDEnabledSwitchOnState(value);
     this.standbyLEDStates.On = Boolean(value);
@@ -793,7 +792,7 @@ export class BigAssFans_i6PlatformAccessory {
   async setStandbyLEDBrightness(value: CharacteristicValue) {
     this.standbyLEDStates.Brightness = value as number;
     clientWrite(this.client,
-      [0x0c, 0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x18, this.standbyLEDStates.Brightness, 0x0c], this);
+      [0x12, 0x09, 0x12, 0x07, 0x1a, 0x05, 0x9a, 0x05, 0x02, 0x18, this.standbyLEDStates.Brightness], this, true);
   }
 
   async getStandbyLEDBrightness(): Promise<CharacteristicValue> {
@@ -813,7 +812,7 @@ export class BigAssFans_i6PlatformAccessory {
     const blue = Math.round(rgb[2]);
 
     // send preset: custom, and rgb values (use varints for RGB values >= 128)
-    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this);
+    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this, true);
   }
 
   async getStandbyLEDHue(): Promise<CharacteristicValue> {
@@ -833,7 +832,7 @@ export class BigAssFans_i6PlatformAccessory {
     const blue = Math.round(rgb[2]);
 
     // send preset: custom, and rgb values (use varints for RGB values >= 128)
-    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this);
+    clientWrite(this.client, buildStandbyLEDColorMessage(red, green, blue), this, true);
   }
 
   async getStandbyLEDSaturation(): Promise<CharacteristicValue> {
@@ -845,7 +844,8 @@ export class BigAssFans_i6PlatformAccessory {
   async setDownlightDarkenServiceOnState(value: CharacteristicValue) {
     if (this.whiteLight) {
       if (value) {
-        setTimeout(() => this.downlightDarkenService.updateCharacteristic(this.platform.Characteristic.On, false), this.incrementalButtonsDelay);
+        setTimeout(() => this.downlightDarkenService.updateCharacteristic(
+          this.platform.Characteristic.On, false), this.incrementalButtonsDelay);
         await writeWhiteLight(this, light => light.setBrightness(light.view.brightness + (-10)));
       }
       return;
@@ -879,7 +879,8 @@ export class BigAssFans_i6PlatformAccessory {
   async setDownlightLightenServiceOnState(value: CharacteristicValue) {
     if (this.whiteLight) {
       if (value) {
-        setTimeout(() => this.downlightLightenService.updateCharacteristic(this.platform.Characteristic.On, false), this.incrementalButtonsDelay);
+        setTimeout(() => this.downlightLightenService.updateCharacteristic(
+          this.platform.Characteristic.On, false), this.incrementalButtonsDelay);
         await writeWhiteLight(this, light => light.setBrightness(light.view.brightness + (10)));
       }
       return;
@@ -1770,89 +1771,38 @@ function backOff(errorMsgString: string, retryCount: number) : number {
  * complete protobuf message to buildFunStack() for decoding and dispatch.
  */
 function onData(pA: BAF, data: Buffer) {
-  debugLog(pA, 'network', 8, `accessory client got: ${data.length} ${(data.length === 1 ? ' byte' : ' bytes')}`);
-  debugLog(pA, 'network', 13, `raw (stuffed) data:  ${hexFormat(data)}`);
-
-  let startIndex = 0;
-  let numChunks = 0;
-  const chunks: Buffer[] = [];
-
-  if (data[0] !== 0xc0 || (data[0] === 0xc0 && data[1] === 0xc0)) {
-    // must be remaining fragment from last message
-    startIndex = data.indexOf(0xc0) + 1;  // should be a starting 0xc0 here
-    if (pA.chunkFragment.length <= 0) {
-      debugLog(pA, 'redflags', 1, `dangling data fragment or empty message - ${startIndex} bytes ignored`);
-    } else {
-      const arr = [pA.chunkFragment, data.subarray(0, startIndex)]; // startIndex serves as length here
-      chunks[numChunks] = Buffer.concat(arr);
-      debugLog(pA, 'network', 14, `pA.chunkFragment ${hexFormat(pA.chunkFragment)}`);
-      debugLog(pA, 'network', 14, `data.subarray(0, ${startIndex}) ${hexFormat(data.subarray(0, startIndex))}`);
-      debugLog(pA, 'network', 9, `built chunk from fragments ${hexFormat(chunks[numChunks])}`);
-      numChunks++;
-    }
+  const buffer = Buffer.concat([pA.chunkFragment, data]);
+  let start = buffer.indexOf(0xc0);
+  if (start === -1) {
+    pA.chunkFragment = Buffer.alloc(0);
+    return;
   }
-
-  debugLog(pA, 'network', 9, `startIndex: ${startIndex}`);
-  let finalEndMarker = 0;
-  let foundStart = false;
-
-  for (let i = startIndex; i < data.length; i++) {
-    if (data[i] === 0xc0) {
-      if (!foundStart) {
-        debugLog(pA, 'network', 9, `start marker at ${i}`);
-        foundStart = true;
-        startIndex = i;
-      } else {
-        debugLog(pA, 'network', 9, `end marker at ${i}`);
-        chunks[numChunks] = data.subarray(startIndex, i+1);
-        numChunks++;
-        foundStart = false;
-        finalEndMarker = i;
+  let end = buffer.indexOf(0xc0, start + 1);
+  while (end !== -1) {
+    if (end > start + 1) {
+      const frame = unstuff(buffer.subarray(start + 1, end));
+      try {
+        const funStack = buildFunStack(frame, pA);
+        if (!pA.capabilitiesEstablished) {
+          pA.funQueue.push(...funStack);
+        } else {
+          flushFunQueue(pA, funStack);
+        }
+      } catch (error) {
+        if (!isProtobufParseError(error)) {
+          throw error;
+        }
+        pA.platform.log.warn(pA.Name + ' - dropped malformed protobuf frame: ' + error.message);
       }
     }
+    start = end;
+    end = buffer.indexOf(0xc0, start + 1);
   }
-
-  if (finalEndMarker < (data.length - 1)) {
-    debugLog(pA, 'network', 9, 'stashed data fragment');
-    debugLog(pA, 'network', 10, `finalEndMarker: ${finalEndMarker}`);
-    pA.chunkFragment = data.subarray(finalEndMarker + 1);
-    debugLog(pA, 'network', 10, `pA.chunkFragment ${hexFormat(pA.chunkFragment)}`);
-  } else {
-    pA.chunkFragment = Buffer.from([]);
-  }
-
-  for (let i = 0; i < numChunks; i++) {
-    if (chunks[i][0] !== 0xc0 || chunks[i][chunks[i].length-1] !== 0xc0) {
-      debugLog(pA, 'redflags', 1, `unbracketed chunk: ${i} - ${hexFormat(chunks[i])}`);
-      continue;
-    } else {
-      chunks[i] = chunks[i].subarray(1, chunks[i].length-1);
-    }
-
-    const unstuffedChunk = unstuff(chunks[i]);
-    debugLog(pA, 'network', 11, 'raw (unstuffed) chunks[' + i + ']: ' + hexFormat(unstuffedChunk));
-
-    let funStack: funCall[];
-    try {
-      funStack = buildFunStack(unstuffedChunk, pA);
-    } catch (error) {
-      if (isProtobufParseError(error)) {
-        pA.platform.log.warn(`${pA.Name} - dropped malformed protobuf frame: ${error.message}`);
-        continue;
-      }
-
-      throw error;
-    }
-    if (!pA.capabilitiesEstablished) {
-      funStack.forEach((value) => {
-        debugLog(pA, 'funstack', 1, `queue until capabilities established: ${value[0].name}(${value[1]})`);
-      });
-      pA.funQueue.push(...funStack);
-    } else {
-      debugLog(pA, 'funstack', (funStack.length === 0) ? 2 : 1, `funstack.length: ${funStack.length}`);
-      debugLog(pA, 'funstack', 1, `pA.capabilitiesEstablished: ${pA.capabilitiesEstablished}`);
-      flushFunQueue(pA, funStack);
-    }
+  // Keep the opening delimiter too: a TCP fragment can end anywhere, including inside an escaped byte.
+  pA.chunkFragment = Buffer.from(buffer.subarray(start));
+  if (pA.chunkFragment.length > 262144) {
+    pA.platform.log.warn(pA.Name + ' - discarded oversized incomplete SLIP frame');
+    pA.chunkFragment = Buffer.alloc(0);
   }
 }
 
@@ -2544,8 +2494,8 @@ function buildStandbyLEDColorMessage(red: number, green: number, blue: number): 
   const field3: number[] = [0x1a, ...varint_encode(field19.length), ...field19];
   // 0x12 <len> <field3>
   const field2inner: number[] = [0x12, ...varint_encode(field3.length), ...field3];
-  // 0x0c 0x12 <len> ... 0x0c (group delimiters)
-  return [0x0c, 0x12, ...varint_encode(field2inner.length), ...field2inner, 0x0c];
+  // The outer envelope is the same as every other Job; clientWrite adds SLIP framing.
+  return [0x12, ...varint_encode(field2inner.length), ...field2inner];
 }
 
 function hexFormat(arg: Buffer | number) {
@@ -3741,7 +3691,8 @@ function capabilitiesChanged(previousCapabilities: Capabilities, currentCapabili
 }
 
 function reconcileCapabilities(pA: BAF, previousCapabilities: Capabilities) {
-  if (pA.downlightEquipped === undefined && !pA.capabilities.hasLight && !pA.capabilities.hasUplight && pA.capabilities.hasColorTempControl) {
+  if (pA.downlightEquipped === undefined && !pA.capabilities.hasLight &&
+      !pA.capabilities.hasUplight && pA.capabilities.hasColorTempControl) {
     const str = 'inferring downlight presence from color temperature capability';
     pA.capabilities.hasLight = true;
     debugLog(pA, 'light', 1, str);

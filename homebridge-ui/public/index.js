@@ -631,6 +631,8 @@ function updateConfigFromForm(validate) {
     setNumberOption(fan, card, "incrementalButtonsDelay");
     setLightOption(fan, card, "downlightEquipped");
     setLightOption(fan, card, "uplightEquipped");
+    const lightModeControl = getFieldValue(card, "dualLightModeControl") || state.config.fans[index]?.dualLightModeControl || "exclusive";
+    fan.dualLightModeControl = ["exclusive", "channels", "legacy"].includes(lightModeControl) ? lightModeControl : "exclusive";
 
     booleanFields.forEach((field) => {
       const checked = getCheckboxValue(card, field.key);

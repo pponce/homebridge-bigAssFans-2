@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as net from 'net';
 
-import { __test__ } from '../src/platformAccessory';
+import { __test__, BigAssFans_i6PlatformAccessory } from '../src/platformAccessory';
 import { parseCapabilitiesFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
 
 class FakeSocket extends EventEmitter {
   public writes: Buffer[] = [];
   public keepAlive = false;
   public destroyed = false;
+  public writable = true;
 
   write(buffer: Buffer) {
     this.writes.push(buffer);
@@ -32,7 +33,14 @@ class FakeSocket extends EventEmitter {
 }
 
 class FakeService {
+  public values = new Map<string, unknown>();
   public characteristics = new Set<string>();
+
+  updateCharacteristic(characteristic: string, value: unknown) {
+    this.values.set(characteristic, value);
+    return this;
+  }
+
   public name?: string;
 
   constructor(
@@ -60,6 +68,7 @@ class FakeService {
 
   getCharacteristic(_characteristic: string) {
     return {
+      setProps() { return this; },
       onGet() {
         return this;
       },
@@ -72,6 +81,7 @@ class FakeService {
 
 class FakeAccessory {
   public services: FakeService[] = [];
+  public context: { device: object; whiteLightMemory?: { down?: number; up?: number } } = { device: {} };
 
   constructor() {
     this.services.push(new FakeService('AccessoryInformation'));
@@ -857,7 +867,116 @@ async function testProbeRequestsStateRefresh() {
   }
 }
 
+
+function createDualLightTestState() {
+  const fixture = createTestServiceState();
+  const state = Object.assign(Object.create(BigAssFans_i6PlatformAccessory.prototype), fixture.state, {
+    client: new FakeSocket(),
+    chunkFragment: Buffer.alloc(0),
+    funQueue: [],
+    whiteLightReport: {},
+    lightModeServices: new Map(),
+    dualLightModeControl: 'exclusive',
+    capabilitiesEstablished: true,
+    showEcoModeSwitch: false,
+    showStandbyLED: true,
+    targetBulb: -1,
+    downlightStates: { On: false, Brightness: 1 },
+    uplightStates: { On: false, Brightness: 1 },
+    standbyLEDStates: { On: false, Brightness: 0, Hue: 0, Saturation: 0 },
+    standbyRGB: [0, 0, 0],
+  }) as BigAssFans_i6PlatformAccessory;
+  state.capabilities.hasLight = true;
+  state.capabilities.hasUplight = true;
+  state.capabilities.hasColorTempControl = true;
+  state.capabilities.hasStandbyLED = true;
+  Object.assign(state.platform.Characteristic, {
+    On: 'On', Brightness: 'Brightness', ColorTemperature: 'ColorTemperature', Hue: 'Hue', Saturation: 'Saturation',
+  });
+  return { ...fixture, state };
+}
+
+function reportFrame(fields: Array<[number, number]>) {
+  const properties = fields.flatMap(([field, value]) => {
+    const property = [...__test__.varint_encode(field * 8), ...__test__.varint_encode(value)];
+    return [0x12, ...__test__.varint_encode(property.length), ...property];
+  });
+  const update = [0x22, ...__test__.varint_encode(properties.length), ...properties];
+  const root = [0x12, ...__test__.varint_encode(update.length), ...update];
+  const escaped = root.flatMap(byte => byte === 0xc0 ? [0xdb, 0xdc] : byte === 0xdb ? [0xdb, 0xdd] : [byte]);
+  return Buffer.from([0xc0, ...escaped, 0xc0]);
+}
+
+function testCoordinatedServiceLifecycleAndFragmentedReports() {
+  const { state, accessory } = createDualLightTestState();
+  __test__.makeServices(state);
+  assert.ok(accessory.getServiceById('Lightbulb', 'white-light'));
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-1'), undefined);
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-2'), undefined);
+  assert.equal(state.lightModeServices.size, 3);
+  assert.ok(accessory.getServiceById('Lightbulb', 'light-3'));
+  assert.equal(accessory.getServiceById('Switch', 'switch-7'), undefined);
+
+  // Mode intentionally appears after brightness in the same update.
+  const frame = reportFrame([[69, 67], [68, 1], [82, 0], [71, 3008], [78, 2700], [79, 4000]]);
+  for (const byte of frame) {
+    __test__.onData(state, Buffer.from([byte]));
+  }
+  assert.equal(state.whiteLight?.ready, true);
+  assert.equal(state.whiteLight?.state.selection, 0);
+  assert.equal(state.whiteLight?.memory.down, 67);
+  assert.equal(accessory.getServiceById('Lightbulb', 'white-light')?.values.get('Brightness'), 67);
+  assert.equal(accessory.context.whiteLightMemory?.down, 67);
+
+  __test__.onData(state, Buffer.concat([
+    reportFrame([[82, 2], [69, 80], [68, 1]]),
+    reportFrame([[82, 1], [69, 25], [68, 1]]),
+  ]));
+  assert.deepEqual(state.whiteLight?.memory, { down: 25, up: 80 });
+  state.dualLightModeControl = 'channels';
+  __test__.makeServices(state);
+  assert.equal(state.lightModeServices.size, 2);
+  assert.equal(accessory.getServiceById('Switch', 'white-mode-0'), undefined);
+
+  state.noLights = true;
+  __test__.makeServices(state);
+  assert.equal(state.whiteLight, undefined);
+  assert.equal(accessory.getServiceById('Lightbulb', 'white-light'), undefined);
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-3'), undefined);
+}
+
+function testUplightOnlyIsNotMistakenForDualLight() {
+  const { state, accessory } = createDualLightTestState();
+  state.capabilities.hasLight = false;
+  state.capabilities.hasStandbyLED = false;
+  __test__.reconcileCapabilities(state, { ...state.capabilities });
+  assert.equal(state.capabilities.hasLight, false);
+  __test__.makeServices(state);
+  assert.equal(state.whiteLight, undefined);
+  assert.equal(accessory.getServiceById('Lightbulb', 'white-light'), undefined);
+  assert.ok(accessory.getServiceById('Lightbulb', 'light-2'));
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-3'), undefined);
+}
+
+function testStandbyMessageEnvelope() {
+  const message = Buffer.from(__test__.buildStandbyLEDColorMessage(128, 255, 64));
+  // ApiMessage -> Job -> repeated Property -> StandbyLed. There must be no protobuf group delimiters.
+  let bytes: Buffer = message;
+  for (const expectedKey of [0x12, 0x12, 0x1a, 0x29a]) {
+    let key: number;
+    let length: number;
+    [bytes, key] = __test__.getVarint(bytes);
+    assert.equal(key, expectedKey);
+    [bytes, length] = __test__.getVarint(bytes);
+    assert.equal(bytes.length, length);
+  }
+  assert.equal(message[0], 0x12);
+}
+
 async function main() {
+  testCoordinatedServiceLifecycleAndFragmentedReports();
+  testUplightOnlyIsNotMistakenForDualLight();
+  testStandbyMessageEnvelope();
   testGetVarintSupportsLargeValues();
   testStandbyLEDColorMessageUsesVarints();
   testMalformedFrameIsDropped();
