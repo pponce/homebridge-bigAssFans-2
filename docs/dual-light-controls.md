@@ -8,6 +8,7 @@ Choose **Dual-light mode controls** in the plugin settings:
 
 - **Down / Up / Both — one selected** (`exclusive`, default): selecting a mode turns the white light on. Turning the selected mode switch off leaves it selected; use White Light to turn the light off. The selected mode remains visible while the light is off.
 - **Down + Up — combine switches** (`channels`): Down on / Up off selects Down; Up on / Down off selects Up; both on selects Both; both off turns the white light off. Turning White Light back on restores the last selected mode.
+- **Both / Up — single switch** (`both-up`): one **Both Lights** switch. On selects Both; Off selects Up only. Selecting either mode turns the white light on; use the White Light tile to turn it off. The switch retains the selected mode while the light is off. Both restores Down/Both's remembered brightness and Up restores Up's. There is no Down-only selector in this layout. Changes made in the BAF app or with the remote are still honored, including Down-only; select Both Lights on or off to return to Both or Up.
 - **Legacy separate dimmers** (`legacy`): retain the old layout.
 
 Down and Up remember separate brightness levels. Entering Both restores Down's remembered level. Dimming in Both changes the shared output and Down's memory, leaving Up's memory alone. Memory is kept per accessory in Homebridge's cache and survives restarts. Until an individual mode has been used, it inherits the current level. Removing the accessory/cache also removes its brightness memory.

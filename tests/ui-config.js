@@ -326,3 +326,13 @@ test("a test for a previous IP cannot fill the MAC or mark the new address detec
   assert.equal(page.cards()[0].querySelector(".pill").textContent, "Not tested");
   assert.equal(page.host.saveEnabled, false);
 });
+
+test("Both / Up single-switch mode survives Save and reopening", async () => {
+  const page = await openPage();
+  page.edit(0, "dualLightModeControl", "both-up");
+  await page.settle();
+  await page.hostSave();
+  assert.equal(page.host.saved[0].fans[0].dualLightModeControl, "both-up");
+  const reopened = await openPage(page.host.saved);
+  assert.equal(reopened.cards()[0].querySelector('[data-fan-field="dualLightModeControl"]').value, "both-up");
+});

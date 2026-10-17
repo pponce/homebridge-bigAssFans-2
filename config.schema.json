@@ -195,11 +195,12 @@
             },
             "dualLightModeControl": {
               "title": "Dual-light mode controls",
-              "description": "Only applies to fans with both white lights. One shared dimmer with three mode selectors, or two combinable Down/Up switches.",
+              "description": "Only applies to fans with both white lights. Choose three mode selectors, combinable Down/Up switches, or both-up: one Both Lights switch (on = Both, off = Up).",
               "type": "string",
               "enum": [
                 "exclusive",
                 "channels",
+                "both-up",
                 "legacy"
               ],
               "default": "exclusive"

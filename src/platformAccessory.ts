@@ -56,7 +56,7 @@ export class BigAssFans_i6PlatformAccessory {
   public whiteLight?: DualLightCoordinator;
   public whiteLightService?: Service;
   public lightModeServices: Map<number, Service> = new Map();
-  public dualLightModeControl: 'exclusive' | 'channels' | 'legacy' = 'exclusive';
+  public dualLightModeControl: 'exclusive' | 'channels' | 'both-up' | 'legacy' = 'exclusive';
   public whiteLightReport: Partial<WhiteLightState> = {};
   public nightLight?: NightLightCoordinator;
   public nightLightReport?: NightLightState;
@@ -1129,7 +1129,7 @@ function makeCoordinatedLights(pA: BAF) {
     pA.whiteLightService.removeCharacteristic(pA.whiteLightService.getCharacteristic(c.ColorTemperature));
   }
   pA.lightModeServices.clear();
-  const modes = pA.dualLightModeControl === 'channels' ? [1, 2] : [1, 2, 0];
+  const modes = pA.dualLightModeControl === 'both-up' ? [0] : pA.dualLightModeControl === 'channels' ? [1, 2] : [1, 2, 0];
   for (const mode of [0, 1, 2]) {
     const subtype = 'white-mode-' + mode;
     if (!modes.includes(mode)) {
@@ -1138,14 +1138,20 @@ function makeCoordinatedLights(pA: BAF) {
     }
     const service = pA.accessory.getServiceById(serviceType.Switch, subtype) ||
       pA.accessory.addService(serviceType.Switch, subtype, subtype);
-    setName(pA, service, pA.Name + (mode === 0 ? ' Both' : mode === 1 ? ' Down' : ' Up'));
+    setName(pA, service, pA.Name + (pA.dualLightModeControl === 'both-up'
+      ? ' Both Lights' : mode === 0 ? ' Both' : mode === 1 ? ' Down' : ' Up'));
     service.getCharacteristic(c.On)
       .onGet(() => {
         const light = requireWhiteLight(pA);
         return pA.dualLightModeControl === 'channels' ? light.channelOn(mode as 1 | 2) : light.view.selection === mode;
       })
-      .onSet(value => writeWhiteLight(pA, light => pA.dualLightModeControl === 'channels'
-        ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value))));
+      .onSet(value => writeWhiteLight(pA, light => {
+        if (pA.dualLightModeControl === 'both-up') {
+          return light.select(value ? 0 : 2, true);
+        }
+        return pA.dualLightModeControl === 'channels'
+          ? light.setChannel(mode as 1 | 2, Boolean(value)) : light.select(mode as 0 | 1 | 2, Boolean(value));
+      }));
     pA.lightModeServices.set(mode, service);
   }
 }

@@ -992,6 +992,72 @@ function testUplightOnlyIsNotMistakenForDualLight() {
   assert.equal(accessory.getServiceById('Lightbulb', 'light-3'), undefined);
 }
 
+async function testBothUpSingleSwitchLayout() {
+  const { state, accessory } = createDualLightTestState();
+  __test__.makeServices(state);
+  __test__.onData(state, reportFrame([[82, 1], [68, 1], [69, 25]]));
+  __test__.onData(state, reportFrame([[82, 2], [68, 1], [69, 75]]));
+  state.dualLightModeControl = 'both-up';
+  __test__.makeServices(state);
+  assert.equal(state.lightModeServices.size, 1);
+  const both = accessory.getServiceById('Switch', 'white-mode-0')!;
+  const white = accessory.getServiceById('Lightbulb', 'white-light')!;
+  assert.ok(both);
+  assert.match(both.name!, /Both Lights$/);
+  assert.equal(accessory.getServiceById('Switch', 'white-mode-1'), undefined);
+  assert.equal(accessory.getServiceById('Switch', 'white-mode-2'), undefined);
+
+  const light = state.whiteLight!;
+  try {
+    const on = both.setters.get('On')!(true);
+    light.flush();
+    await on;
+    assert.equal(light.state.selection, 0);
+    assert.equal(light.state.brightness, 25);
+    assert.equal(both.values.get('On'), true);
+    light.report({ ...light.state });
+
+    const dim = white.setters.get('Brightness')!(45);
+    light.flush();
+    await dim;
+    light.report({ ...light.state });
+    const up = both.setters.get('On')!(false);
+    light.flush();
+    await up;
+    assert.equal(light.state.selection, 2);
+    assert.equal(light.state.brightness, 75);
+    assert.equal(light.state.power, 1, 'Turning the mode switch off selects Up, not light power off');
+    assert.equal(both.values.get('On'), false);
+    light.report({ ...light.state });
+
+    const back = both.setters.get('On')!(true);
+    light.flush();
+    await back;
+    assert.equal(light.state.brightness, 45);
+    light.report({ ...light.state });
+    const off = white.setters.get('On')!(false);
+    light.flush();
+    await off;
+    assert.equal(light.state.power, 0);
+    assert.equal(both.values.get('On'), true, 'Mode is retained when White Light turns off');
+
+    const socket = state.client as unknown as FakeSocket;
+    const writes = socket.writes.length;
+    __test__.onData(state, reportFrame([[82, 2], [68, 1], [69, 60]]));
+    assert.equal(both.values.get('On'), false);
+    assert.equal(white.values.get('Brightness'), 60);
+    assert.equal(socket.writes.length, writes);
+    state.dualLightModeControl = 'exclusive';
+    __test__.makeServices(state);
+    assert.equal(state.lightModeServices.size, 3);
+    assert.ok(accessory.getServiceById('Switch', 'white-mode-1'));
+    assert.ok(accessory.getServiceById('Switch', 'white-mode-2'));
+  } finally {
+    light.disconnect();
+    state.nightLight?.disconnect();
+  }
+}
+
 async function testExternalLightReportWinsDuringHomeKitWrite() {
   const { state, accessory } = createDualLightTestState();
   __test__.makeServices(state);
@@ -1225,6 +1291,7 @@ async function testNightLightFeedbackTimeoutAndDisconnect() {
 }
 
 async function main() {
+  await testBothUpSingleSwitchLayout();
   testMacDiscoveryReadsOnlyFanIdentity();
   await testNightLightControlsPreserveEnableAndIntensity();
   await testNightLightInitialEnableAndZeroIntensityScene();
