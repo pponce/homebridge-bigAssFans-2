@@ -239,3 +239,7 @@ Special thanks to:
 ## License
 
 MIT
+
+## Coordinated dual-light controls
+
+Fans with both a downlight and uplight can use one white-light dimmer with selectable Down / Up / Both modes, or two combinable Down and Up switches. Each single-light mode remembers its brightness; Both uses Down's level. See [dual-light controls](docs/dual-light-controls.md) for configuration, color temperature, night-light behavior and device testing.

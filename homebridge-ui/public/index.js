@@ -29,6 +29,8 @@ const state = {
 };
 
 const fanDefaults = {
+  dualLightModeControl: "exclusive",
+  showWhooshSwitch: false,
   showFanAutoSwitch: false,
   showLightAutoSwitch: false,
   showDimToWarmSwitch: false,
@@ -49,6 +51,11 @@ const fanDefaults = {
 };
 
 const booleanFields = [
+  {
+    key: "showWhooshSwitch",
+    label: "Whoosh switch",
+    help: "Adds a named Whoosh switch alongside the fan tile's Swing control.",
+  },
   {
     key: "showFanAutoSwitch",
     label: "Fan Auto switch (legacy)",
@@ -135,6 +142,7 @@ const knownFanFields = [
   "mac",
   "probeFrequency",
   "incrementalButtonsDelay",
+  "dualLightModeControl",
   "downlightEquipped",
   "uplightEquipped",
   ...booleanFields.map((field) => field.key),
@@ -264,7 +272,9 @@ function createFanCard(fan, index) {
     tuckedCapabilityFields.push(incrementalButtonDelay);
   }
 
+  const modeControl = createModeSelect(index, getValue(fan, "dualLightModeControl"));
   const visibleCapabilityFields = [
+    ...(lightsHidden ? [] : [modeControl]),
     ...(lightsHidden ? [] : [downlightDetection, uplightDetection]),
     ...(incrementalButtonsEnabled ? [incrementalButtonDelay] : []),
   ];
@@ -417,6 +427,28 @@ function createNumberField(index, key, label, value, help) {
   input.value = String(value);
   wrapper.appendChild(input);
   wrapper.appendChild(createSmall(help));
+  return wrapper;
+}
+
+function createModeSelect(index, value) {
+  const wrapper = document.createElement("label");
+  wrapper.className = "field";
+  wrapper.appendChild(createSpan("Dual-light mode controls"));
+  const select = document.createElement("select");
+  select.dataset.fanField = "dualLightModeControl";
+  select.dataset.fanIndex = String(index);
+  [
+    ["exclusive", "Down / Up / Both — one selected"],
+    ["channels", "Down + Up — combine switches"],
+    ["legacy", "Legacy separate dimmers"],
+  ].forEach(([key, label]) => {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = label;
+    select.appendChild(option);
+  });
+  select.value = value;
+  wrapper.append(select, createSmall("Used only when both lights are present. Both mode shares brightness and restores Down's level."));
   return wrapper;
 }
 

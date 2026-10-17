@@ -9,6 +9,7 @@ export interface BigAssFansDeviceConfig {
   mac: string;
   debugLevels?: DebugLevelConfigEntry[];
   noLights?: boolean;
+  dualLightModeControl?: 'exclusive' | 'channels' | 'legacy';
   downlightEquipped?: LightDetectionOverride;
   uplightEquipped?: LightDetectionOverride;
   whoosh?: boolean;
@@ -41,6 +42,7 @@ export interface BigAssFansPlatformConfig extends PlatformConfig {
 
 export interface BigAssFansAccessoryContext {
   device: BigAssFansDeviceConfig;
+  whiteLightMemory?: { down?: number; up?: number };
 }
 
 export interface BigAssFansPlatformContext {

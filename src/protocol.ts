@@ -108,7 +108,7 @@ export function applyCapabilityConfig(
   const effective = { ...capabilities };
 
   if (config.downlightEquipped === undefined || config.downlightEquipped === 'auto') {
-    if (!effective.hasLight && effective.hasColorTempControl) {
+    if (!effective.hasLight && !effective.hasUplight && effective.hasColorTempControl) {
       effective.hasLight = true;
     }
   } else {
