@@ -190,6 +190,7 @@ export class BigAssFans_i6PlatformAccessory {
   public displayedFanPercent?: number;
   public displayedFanSpeed?: number;
   public fanDisplayTimer?: ReturnType<typeof setTimeout>;
+  public fanDisplayRepeatTimer?: ReturnType<typeof setTimeout>;
   public fanRefreshTimer?: ReturnType<typeof setTimeout>;
   public lastRotationSpeedRequestAt = 0;
   public lastRotationSpeedRequestPercent: number | undefined = undefined;
@@ -612,12 +613,24 @@ export class BigAssFans_i6PlatformAccessory {
     this.pendingRotationSpeedRequestDeviceSpeed = speed;
     this.displayedFanPercent = requestedPercent;
     this.displayedFanSpeed = speed;
+    clearTimeout(this.fanDisplayRepeatTimer);
+    this.fanDisplayRepeatTimer = undefined;
     clearTimeout(this.fanDisplayTimer);
     this.fanDisplayTimer = setTimeout(() => {
       this.fanDisplayTimer = undefined;
       this.displayedFanPercent = undefined;
       this.displayedFanSpeed = undefined;
-      this.fanService.updateCharacteristic(this.platform.Characteristic.RotationSpeed, rotationSpeedPercent(this.fanStates.RotationSpeed));
+      const settledSpeed = this.fanStates.RotationSpeed;
+      const characteristic = this.fanService.getCharacteristic(this.platform.Characteristic.RotationSpeed);
+      characteristic.sendEventNotification(rotationSpeedPercent(settledSpeed));
+      // One bounded repeat for controllers retaining the slider's requested value.
+      this.fanDisplayRepeatTimer = setTimeout(() => {
+        this.fanDisplayRepeatTimer = undefined;
+        if (this.displayedFanPercent === undefined && this.fanStates.RotationSpeed === settledSpeed) {
+          characteristic.sendEventNotification(rotationSpeedPercent(settledSpeed));
+        }
+      }, 1000);
+      this.fanDisplayRepeatTimer.unref?.();
     }, ROTATION_SPEED_DISPLAY_MS);
     this.fanDisplayTimer.unref?.();
     const payload = requestedPercent === 0 ? ONEBYTEHEADER.concat([0xd8, 0x02, 0])
@@ -2099,6 +2112,10 @@ function targetedlightOnState(value:number, service:Service, states:lightStates,
 
 function fanOnState(s: string, pA:BAF) {
   const value = Number(s);
+  if (value === 0) {
+    clearTimeout(pA.fanDisplayRepeatTimer);
+    pA.fanDisplayRepeatTimer = undefined;
+  }
 
   // Update TargetFanState: 0=Manual, 1=Auto
   const isAuto = (value === 2);
@@ -2179,6 +2196,10 @@ function fanRotationSpeed(s: string, pA:BAF) {
   const value = Number(s);
   if (!Number.isInteger(value) || value < 0 || value > MAXFANSPEED) {
     return;
+  }
+  if (value !== pA.fanStates.RotationSpeed) {
+    clearTimeout(pA.fanDisplayRepeatTimer);
+    pA.fanDisplayRepeatTimer = undefined;
   }
   clearTimeout(pA.fanRefreshTimer);
   pA.fanRefreshTimer = undefined;
@@ -2558,6 +2579,8 @@ function rememberFanSpeed(pA: BAF, speed: number) {
 }
 
 function clearRotationSpeedDiagnostics(pA: BAF) {
+  clearTimeout(pA.fanDisplayRepeatTimer);
+  pA.fanDisplayRepeatTimer = undefined;
   clearTimeout(pA.fanDisplayTimer);
   clearTimeout(pA.fanRefreshTimer);
   pA.fanDisplayTimer = undefined;

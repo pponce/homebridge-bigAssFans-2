@@ -20,3 +20,9 @@ An Off report no longer cancels a queued slider command. An explicit HomeKit Off
 4. Once running, select 100%. Expect maximum speed.
 5. Set speed through the BAF app. HomeKit should follow its reported value.
 6. Try manual and automatic modes on both single-light and dual-light fans. Automated tests cannot confirm firmware timing on every model.
+
+## Settled slider notifications
+
+At the end of the 1.5-second display delay, the plugin forces a HomeKit event notification with the settled percentage. It repeats that notification once, one second later, even if the value is unchanged. A new slider request, differing speed feedback, Off, or disconnect cancels a pending repeat. These events do not send commands to the physical fan.
+
+This is a compatibility experiment for Apple Home's expanded slider retaining the requested percentage while the main tile already displays the mapped value. Live testing is needed to establish whether Apple Home refreshes that view.

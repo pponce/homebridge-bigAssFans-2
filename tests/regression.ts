@@ -82,6 +82,10 @@ class FakeService {
   getCharacteristic(characteristic: string) {
     const service = this;
     return {
+      sendEventNotification(value: number) {
+        service.updateCharacteristic(characteristic, value);
+        return this;
+      },
       setProps() { return this; },
       onGet() {
         return this;
@@ -235,6 +239,13 @@ function createTestAccessoryState() {
       },
       fanService: {
         updates: [] as Array<{ characteristic: string; value: number }>,
+        notifications: [] as number[],
+        getCharacteristic(characteristic: string) {
+          return { sendEventNotification: (value: number) => {
+            this.notifications.push(value);
+            this.updateCharacteristic(characteristic, value);
+          } };
+        },
         updateCharacteristic(characteristic: string, value: number) {
           this.updates.push({ characteristic, value });
         },
@@ -463,6 +474,56 @@ async function testDuplicateFanActiveWriteIsSuppressed() {
 
   assert.equal(socket.writes.length, 2);
   assert.match(infos.at(-1) ?? '', /suppressing duplicate Active=1/i);
+}
+
+async function testSettledSpeedNotifications() {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10000 });
+  try {
+    const { state } = createTestAccessoryState();
+    const socket = new FakeSocket();
+    state.client = socket;
+    state.fanStates.Active = 1;
+    await __test__.invokeSetRotationSpeed(state as never, 50);
+    mock.timers.tick(125);
+    __test__.fanRotationSpeed('4', state as never);
+    mock.timers.tick(1375);
+    assert.deepEqual(state.fanService.notifications, [57]);
+    const writes = socket.writes.length;
+    mock.timers.tick(1000);
+    assert.deepEqual(state.fanService.notifications, [57, 57]);
+    mock.timers.tick(10000);
+    assert.equal(state.fanService.notifications.length, 2, 'Only one repeat is sent');
+    assert.equal(socket.writes.length, writes, 'Display notifications must not send fan commands');
+
+    await __test__.invokeSetRotationSpeed(state as never, 40);
+    mock.timers.tick(125);
+    __test__.fanRotationSpeed('3', state as never);
+    mock.timers.tick(1375);
+    assert.equal(state.fanService.notifications.at(-1), 43);
+    await __test__.invokeSetRotationSpeed(state as never, 70);
+    mock.timers.tick(125);
+    __test__.fanRotationSpeed('5', state as never);
+    const count = state.fanService.notifications.length;
+    mock.timers.tick(875);
+    assert.equal(state.fanService.notifications.length, count, 'New input cancels the old repeat');
+    mock.timers.tick(500);
+    assert.equal(state.fanService.notifications.at(-1), 71);
+    __test__.fanRotationSpeed('2', state as never);
+    const externalCount = state.fanService.notifications.length;
+    mock.timers.tick(1000);
+    assert.equal(state.fanService.notifications.length, externalCount, 'External changes cancel the repeat');
+
+    await __test__.invokeSetRotationSpeed(state as never, 50);
+    mock.timers.tick(125);
+    __test__.fanRotationSpeed('4', state as never);
+    mock.timers.tick(1375);
+    await __test__.invokeSetFanActive(state as never, 0);
+    const offCount = state.fanService.notifications.length;
+    mock.timers.tick(1000);
+    assert.equal(state.fanService.notifications.length, offCount, 'Off cancels the repeat');
+  } finally {
+    mock.timers.reset();
+  }
 }
 
 async function testFanSpeedFeedbackAndRestore() {
@@ -1355,6 +1416,7 @@ async function main() {
   await testFanActiveDiagnosticsAreRecorded();
   await testFanActiveOptimisticallyUpdatesHomeKitState();
   await testDuplicateFanActiveWriteIsSuppressed();
+  await testSettledSpeedNotifications();
   await testFanSpeedFeedbackAndRestore();
   testFanUpdatesAreNotBlockedByUnknownTargetBulb();
   testColorTemperatureCapabilityImpliesDownlight();
