@@ -1,5 +1,7 @@
 import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, Service, Characteristic } from 'homebridge';
 
+import { AccessoryLayout } from './accessoryLayout';
+
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { BigAssFans_i6PlatformAccessory } from './platformAccessory';
 import type { BigAssFansAccessoryContext, BigAssFansDeviceConfig, BigAssFansPlatformConfig } from './types';
@@ -10,6 +12,7 @@ import type { BigAssFansAccessoryContext, BigAssFansDeviceConfig, BigAssFansPlat
  * Parses the user config and discovers/registers fan accessories with Homebridge.
  */
 export class BigAssFans_i6Platform implements DynamicPlatformPlugin {
+  public readonly layout: AccessoryLayout;
   public readonly Service: typeof Service;
   public readonly Characteristic: typeof Characteristic;
   public readonly accessories: PlatformAccessory<BigAssFansAccessoryContext>[] = [];
@@ -19,6 +22,7 @@ export class BigAssFans_i6Platform implements DynamicPlatformPlugin {
     public readonly config: BigAssFansPlatformConfig,
     public readonly api: API,
   ) {
+    this.layout = new AccessoryLayout(api, this.accessories, PLUGIN_NAME, PLATFORM_NAME);
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
     this.log.debug('Finished initializing platform');
@@ -65,13 +69,14 @@ export class BigAssFans_i6Platform implements DynamicPlatformPlugin {
       this.log.info('-------------------------------------------');
     }
 
-    const staleAccessories = this.accessories.filter(accessory => !configuredUUIDs.has(accessory.UUID));
+    const staleAccessories = this.accessories.filter(accessory => !configuredUUIDs.has(accessory.context.parentUUID ?? accessory.UUID));
     if (staleAccessories.length > 0) {
       staleAccessories.forEach(accessory => {
         this.log.info('Removing stale accessory from cache:', accessory.displayName);
       });
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, staleAccessories);
-      this.accessories.splice(0, this.accessories.length, ...this.accessories.filter(accessory => configuredUUIDs.has(accessory.UUID)));
+      const retained = this.accessories.filter(accessory => configuredUUIDs.has(accessory.context.parentUUID ?? accessory.UUID));
+      this.accessories.splice(0, this.accessories.length, ...retained);
     }
   }
 
@@ -114,9 +119,11 @@ export class BigAssFans_i6Platform implements DynamicPlatformPlugin {
 
       const accessory = new this.api.platformAccessory<BigAssFansAccessoryContext>(fan.name, uuid);
       accessory.context.device = fan;
+      this.accessories.push(accessory);
 
       new BigAssFans_i6PlatformAccessory(this, accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
     }
   }
 }
+

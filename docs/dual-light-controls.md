@@ -83,3 +83,16 @@ Setting the White Light dimmer to zero sends Off. Turning it on again (including
 HomeKit does not report when a slider drag ends. Positive brightness writes less than 1.2 seconds apart are treated as one gesture. If that gesture ends in zero or Off, the brightness from before the gesture is retained instead of an intermediate value such as 1%. Pausing at a positive level for 1.2 seconds saves it, including an intentional 1%. A pause during a slow drag can therefore save an intermediate level. Different brightness values reported by the fan remain authoritative.
 
 Mode-only feedback updates the HomeKit mode switches immediately, even when brightness arrives in a later frame. The plugin requests refreshed state without writing back over external changes.
+
+### Separate HomeKit tiles for dual-light fans
+
+Dual-light fans expose the following accessories through the same Homebridge bridge:
+
+- The original Fan accessory, retaining its fan controls and optional sensors/switches.
+- White Ambiance: one white-light dimmer with On/Off and supported color temperature.
+- LED Back Light: one color-light accessory, only when supported and enabled in configuration.
+- Light Mode: the configured Down/Up/Both or Down+Up switches together on one accessory. Both/Up has just one switch.
+
+All tiles share one fan connection and lighting coordinator. Mode selection, brightness memory, BAF app feedback, and standby behavior are unchanged. Apple Home controls the visual presentation of each accessory; the mode accessory can be shown together without grouping it with the fan or lights.
+
+This migration retains the original fan identity and stored brightness memory. The lights and mode controls gain separate accessory identities, so their room assignment, names, favorites, and scene/automation references may need updating in Apple Home. Do not delete or re-pair the bridge. Single-light fans retain their existing accessory layout. Disabling a light feature removes its separate accessory; removing a fan removes all its child accessories.

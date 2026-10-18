@@ -1,3 +1,6 @@
+import type { API, PlatformAccessory } from 'homebridge';
+import type { BigAssFansAccessoryContext } from '../src/types';
+import { AccessoryLayout } from '../src/accessoryLayout';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as net from 'net';
@@ -95,7 +98,7 @@ class FakeAccessory {
   public services: FakeService[] = [];
   public context: { device: object; whiteLightMemory?: { down?: number; up?: number }; nightLightBrightness?: number } = { device: {} };
 
-  constructor() {
+  constructor(public displayName = 'Test Fan', public UUID = 'test-fan') {
     this.services.push(new FakeService('AccessoryInformation'));
   }
 
@@ -119,6 +122,10 @@ class FakeAccessory {
   }
 
   addService(type: string | { UUID: string }, displayName?: string, subtype?: string) {
+    if (type instanceof FakeService) {
+      this.services.push(type);
+      return type;
+    }
     const uuid = typeof type === 'string' ? type : type.UUID;
     const service = new FakeService(displayName || uuid, uuid, subtype);
     this.services.push(service);
@@ -1304,7 +1311,68 @@ async function testNightLightFeedbackTimeoutAndDisconnect() {
   }
 }
 
+function testSeparateLightAccessories() {
+  const { state, accessory } = createDualLightTestState();
+  accessory.context.device = { name: 'Test Fan', mac: state.MAC };
+  state.capabilities.hasFan = true;
+  state.dualLightModeControl = 'channels';
+  __test__.makeServices(state);
+  const white = state.whiteLightService;
+  const fan = state.fanService;
+  const coordinator = state.whiteLight;
+  const cached = [accessory] as unknown as PlatformAccessory<BigAssFansAccessoryContext>[];
+  const registrations: PlatformAccessory[][] = [];
+  const removals: PlatformAccessory[][] = [];
+  const api = {
+    platformAccessory: FakeAccessory,
+    hap: { Service: state.platform.Service, Characteristic: state.platform.Characteristic, uuid: { generate: (s: string) => s } },
+    registerPlatformAccessories: (_p: string, _n: string, items: PlatformAccessory[]) => registrations.push(items),
+    unregisterPlatformAccessories: (_p: string, _n: string, items: PlatformAccessory[]) => removals.push(items),
+    updatePlatformAccessories: () => undefined,
+  } as unknown as API;
+  const layout = new AccessoryLayout(api, cached, 'plugin', 'platform');
+  Object.assign(state.platform, { layout });
+  __test__.makeServices(state);
+  assert.equal(cached.length, 4);
+  assert.equal(state.whiteLightService, white, 'Migration reuses the existing service and handlers');
+  assert.equal(state.whiteLight, coordinator, 'Tiles share the same coordinator and socket');
+  assert.equal(state.fanService, fan);
+  assert.equal(accessory.getServiceById('Lightbulb', 'white-light'), undefined);
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-3'), undefined);
+  const tiles = state.lightTiles;
+  assert.equal(tiles.white!.services.filter(s => s.subtype === 'white-light').length, 1);
+  assert.equal(tiles.night!.services.filter(s => s.subtype === 'light-3').length, 1);
+  assert.equal(tiles.modes!.services.filter(s => s.subtype?.startsWith('white-mode-')).length, 2);
+  assert.equal(registrations.flat().length, 3);
+  __test__.makeServices(state);
+  assert.equal(registrations.flat().length, 3, 'Repeated capability reports must not register duplicates');
+
+  // A restarted platform restores child identities and does not create a handler per child.
+  Object.assign(state.platform, { layout: new AccessoryLayout(api, cached, 'plugin', 'platform') });
+  state.dualLightModeControl = 'both-up';
+  __test__.makeServices(state);
+  assert.equal(state.lightTiles.modes, tiles.modes);
+  assert.equal(tiles.modes!.services.filter(s => s.subtype?.startsWith('white-mode-')).length, 1);
+  assert.equal(registrations.flat().length, 3);
+  state.showStandbyLED = false;
+  __test__.makeServices(state);
+  assert.equal(cached.length, 3);
+  assert.equal(removals.flat().length, 1);
+  state.noLights = true;
+  __test__.makeServices(state);
+  assert.equal(cached.length, 1);
+  assert.equal(removals.flat().length, 3);
+  assert.equal(state.fanService, fan);
+  state.noLights = false;
+  state.capabilities.hasUplight = false;
+  __test__.makeServices(state);
+  assert.equal(cached.length, 1, 'Single-light fans stay on their existing accessory');
+  assert.ok(accessory.getServiceById('Lightbulb', 'light-1'));
+  assert.equal(state.fanService, fan);
+}
+
 async function main() {
+  testSeparateLightAccessories();
   assert.equal(normalizeDualLightModeControl('legacy'), 'exclusive');
   assert.equal(normalizeDualLightModeControl(undefined), 'exclusive');
   for (const mode of ['exclusive', 'channels', 'both-up', 'legacy']) {

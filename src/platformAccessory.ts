@@ -1,5 +1,6 @@
 /* eslint-disable no-multi-spaces */
 
+import type { LightTile } from './accessoryLayout';
 import * as net from 'net';
 import type { Service, PlatformAccessory, CharacteristicValue, WithUUID } from 'homebridge';
 import { DualLightCoordinator, lightCommand, normalizeDualLightModeControl, type WhiteLightState } from './lighting';
@@ -53,6 +54,7 @@ function normalizeLightDetectionOverride(value: LightDetectionOverride | undefin
  * fan's proprietary protobuf-over-SLIP protocol on port 31415.
  */
 export class BigAssFans_i6PlatformAccessory {
+  public lightTiles: Partial<Record<LightTile, PlatformAccessory<BigAssFansAccessoryContext>>> = {};
   public whiteLight?: DualLightCoordinator;
   public whiteLightService?: Service;
   public lightModeServices: Map<number, Service> = new Map();
@@ -935,11 +937,13 @@ export class BigAssFans_i6PlatformAccessory {
 }
 
 function makeStandbyLED(pA: BAF) {
-  pA.standbyLEDBulbService = pA.accessory.getService('standbyLED') ||
-  pA.accessory.addService(pA.platform.Service.Lightbulb, 'standbyLED', 'light-3');
+  const owner = pA.lightTiles?.night ?? pA.accessory;
+  pA.standbyLEDBulbService = owner.getService('standbyLED') ||
+  owner.addService(pA.platform.Service.Lightbulb, 'standbyLED', 'light-3');
 
   const capitalizeName = pA.Name[0] === pA.Name[0].toUpperCase();
-  setName(pA, pA.standbyLEDBulbService, pA.Name + (capitalizeName ? ' Night Light' : ' night light'));
+  const label = pA.lightTiles?.night ? ' LED Back Light' : capitalizeName ? ' Night Light' : ' night light';
+  setName(pA, pA.standbyLEDBulbService, pA.Name + label);
 
   if (!pA.nightLight) {
     pA.nightLight = new NightLightCoordinator(
@@ -1090,9 +1094,11 @@ function makeCoordinatedLights(pA: BAF) {
   pA.lightModeServices ??= new Map();
   const serviceType = pA.platform.Service;
   const c = pA.platform.Characteristic;
-  pA.whiteLightService = pA.accessory.getServiceById(serviceType.Lightbulb, 'white-light') ||
-    pA.accessory.addService(serviceType.Lightbulb, 'white-light', 'white-light');
-  setName(pA, pA.whiteLightService, pA.Name + ' White Light');
+  const whiteOwner = pA.lightTiles?.white ?? pA.accessory;
+  const modeOwner = pA.lightTiles?.modes ?? pA.accessory;
+  pA.whiteLightService = whiteOwner.getServiceById(serviceType.Lightbulb, 'white-light') ||
+    whiteOwner.addService(serviceType.Lightbulb, 'white-light', 'white-light');
+  setName(pA, pA.whiteLightService, pA.Name + ' White Ambiance');
   if (!pA.whiteLight) {
     pA.whiteLight = new DualLightCoordinator(
       pA.accessory.context.whiteLightMemory,
@@ -1136,8 +1142,8 @@ function makeCoordinatedLights(pA: BAF) {
       zapService(pA, subtype);
       continue;
     }
-    const service = pA.accessory.getServiceById(serviceType.Switch, subtype) ||
-      pA.accessory.addService(serviceType.Switch, subtype, subtype);
+    const service = modeOwner.getServiceById(serviceType.Switch, subtype) ||
+      modeOwner.addService(serviceType.Switch, subtype, subtype);
     setName(pA, service, pA.Name + (pA.dualLightModeControl === 'both-up'
       ? ' Both Lights' : mode === 0 ? ' Both' : mode === 1 ? ' Down' : ' Up'));
     service.getCharacteristic(c.On)
@@ -1158,6 +1164,16 @@ function makeCoordinatedLights(pA: BAF) {
 
 
 function makeServices(pA: BAF) {
+  const coordinated = !pA.noLights && pA.capabilities.hasLight && pA.capabilities.hasUplight;
+  pA.lightTiles = {};
+  if (coordinated && pA.platform.layout) {
+    pA.lightTiles.white = pA.platform.layout.owner(pA.accessory, 'white', 'White Ambiance', ['white-light']);
+    pA.lightTiles.modes = pA.platform.layout.owner(pA.accessory, 'modes', 'Light Mode',
+      ['white-mode-0', 'white-mode-1', 'white-mode-2']);
+    if (pA.capabilities.hasStandbyLED && pA.showStandbyLED) {
+      pA.lightTiles.night = pA.platform.layout.owner(pA.accessory, 'night', 'LED Back Light', ['light-3']);
+    }
+  }
   const capitalizeName = pA.Name[0] === pA.Name[0].toUpperCase();
   let accessoryName:string;
   pA.bulbCount = 0;
@@ -1302,7 +1318,6 @@ function makeServices(pA: BAF) {
     );
   }
 
-  const coordinated = !pA.noLights && pA.capabilities.hasLight && pA.capabilities.hasUplight;
   if (coordinated) {
     makeCoordinatedLights(pA);
   } else {
@@ -1534,6 +1549,7 @@ function makeServices(pA: BAF) {
   }
 
   pA.platform.api.updatePlatformAccessories([pA.accessory]);
+  pA.platform.layout?.reconcile(pA.accessory, Object.keys(pA.lightTiles) as LightTile[]);
   debugLog(pA, 'progress', 1, 'leaving makeServices');
 }
 
@@ -1544,38 +1560,40 @@ type ServiceSubtypeAlias = {
 
 /** Removes matching services from the accessory cache by display name, configured name, or subtype. */
 function zapService(pA:BAF, serviceName: string, aliases: string[] = [], subtypeAliases: ServiceSubtypeAlias[] = []) {
-  const serviceKeys = new Set([serviceName, ...aliases].map(normalizeServiceKey));
-  const services = new Set<Service>();
+  for (const owner of [pA.accessory, ...(pA.platform.layout?.children(pA.accessory) ?? [])]) {
+    const serviceKeys = new Set([serviceName, ...aliases].map(normalizeServiceKey));
+    const services = new Set<Service>();
 
-  for (const key of serviceKeys) {
-    const directService = pA.accessory.getService(key);
-    if (directService) {
-      services.add(directService);
+    for (const key of serviceKeys) {
+      const directService = owner.getService(key);
+      if (directService) {
+        services.add(directService);
+      }
     }
-  }
 
-  for (const alias of subtypeAliases) {
-    const serviceById = pA.accessory.getServiceById(alias.serviceType, alias.subtype);
-    if (serviceById) {
-      services.add(serviceById);
+    for (const alias of subtypeAliases) {
+      const serviceById = owner.getServiceById(alias.serviceType, alias.subtype);
+      if (serviceById) {
+        services.add(serviceById);
+      }
     }
-  }
 
-  for (const service of pA.accessory.services) {
-    const serviceValues = [
-      service.displayName,
-      service.name,
-      service.subtype,
-    ].map(normalizeServiceKey);
+    for (const service of owner.services) {
+      const serviceValues = [
+        service.displayName,
+        service.name,
+        service.subtype,
+      ].map(normalizeServiceKey);
 
-    if (serviceValues.some((value) => serviceKeys.has(value))) {
-      services.add(service);
+      if (serviceValues.some((value) => serviceKeys.has(value))) {
+        services.add(service);
+      }
     }
-  }
 
-  for (const service of services) {
-    pA.platform.log.info(`${pA.Name} - removing stale HomeKit service: ${service.displayName || serviceName}`);
-    pA.accessory.removeService(service);
+    for (const service of services) {
+      pA.platform.log.info(`${pA.Name} - removing stale HomeKit service: ${service.displayName || serviceName}`);
+      owner.removeService(service);
+    }
   }
 }
 

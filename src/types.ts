@@ -1,3 +1,4 @@
+import type { AccessoryLayout, LightTile } from './accessoryLayout';
 import type { API, Characteristic, Logger, PlatformConfig, Service } from 'homebridge';
 
 export type DebugLevelConfigEntry = [string, string | number];
@@ -42,11 +43,14 @@ export interface BigAssFansPlatformConfig extends PlatformConfig {
 
 export interface BigAssFansAccessoryContext {
   device: BigAssFansDeviceConfig;
+  parentUUID?: string;
+  lightTile?: LightTile;
   whiteLightMemory?: { down?: number; up?: number };
   nightLightBrightness?: number;
 }
 
 export interface BigAssFansPlatformContext {
+  readonly layout?: AccessoryLayout;
   readonly Service: typeof Service;
   readonly Characteristic: typeof Characteristic;
   readonly log: Logger;
