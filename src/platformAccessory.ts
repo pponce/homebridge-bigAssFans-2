@@ -216,7 +216,7 @@ export class BigAssFans_i6PlatformAccessory {
     public readonly accessory: PlatformAccessory<BigAssFansAccessoryContext>,
   ) {
     const device = accessory.context.device;
-    this.IP = device.ip;
+    this.IP = device.ip ?? '';
     this.MAC = device.mac;
     this.Name = device.name;
     this.dualLightModeControl = normalizeDualLightModeControl(device.dualLightModeControl);
@@ -1194,6 +1194,9 @@ function makeCoordinatedLights(pA: BAF) {
 
 
 function makeServices(pA: BAF) {
+  // Upgrade upstream's optional third dimmer to the coordinated mode controls.
+  zapService(pA, 'bothlights', ['light-4'],
+    [{ serviceType: pA.platform.Service.Lightbulb, subtype: 'light-4' }]);
   const coordinated = !pA.noLights && pA.capabilities.hasLight && pA.capabilities.hasUplight;
   pA.lightTiles = {};
   if (coordinated && pA.platform.layout) {

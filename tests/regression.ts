@@ -965,7 +965,9 @@ function testCoordinatedServiceLifecycleAndFragmentedReports() {
   ]));
   assert.deepEqual(state.whiteLight?.memory, { down: 25, up: 80 });
   state.dualLightModeControl = 'channels';
+  accessory.addService('Lightbulb', 'Both Lights', 'light-4');
   __test__.makeServices(state);
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-4'), undefined);
   assert.equal(state.lightModeServices.size, 2);
   assert.equal(accessory.getServiceById('Switch', 'white-mode-0'), undefined);
 
@@ -1305,7 +1307,9 @@ function testSeparateLightAccessories() {
   accessory.context.device = { name: 'Test Fan', mac: state.MAC };
   state.capabilities.hasFan = true;
   state.dualLightModeControl = 'channels';
+  accessory.addService('Lightbulb', 'Both Lights', 'light-4');
   __test__.makeServices(state);
+  assert.equal(accessory.getServiceById('Lightbulb', 'light-4'), undefined);
   const white = state.whiteLightService;
   const fan = state.fanService;
   const coordinator = state.whiteLight;

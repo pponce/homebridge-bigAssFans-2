@@ -1,3 +1,4 @@
+import { resolveFanIpViaMdns } from '../discovery';
 import * as net from 'net';
 import {
   applyCapabilityConfig,
@@ -49,6 +50,7 @@ interface ConnectionDiagnostic {
   bytesReceived?: number;
   errorCode?: string;
   mac?: string;
+  resolvedIp?: string;
   capabilities?: Capabilities;
   capabilitySummary?: CapabilityExposureSummary;
   capabilitySuggestions?: CapabilityConfigSuggestion[];
@@ -129,14 +131,32 @@ function validateFan(fan: NormalizedFanConfig): string | undefined {
   if (!fan.name) {
     return 'Fan name is required.';
   }
-  if (!fan.ip) {
-    return 'Fan IP address or hostname is required.';
+  if (!fan.ip && !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(fan.mac)) {
+    return 'Enter an IP address or a valid MAC address for network discovery.';
   }
   // The MAC identifies the saved HomeKit accessory; it is not needed to probe an IP.
   return undefined;
 }
 
-function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ConnectionDiagnostic> {
+async function testFanConnection(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ConnectionDiagnostic> {
+  const validationError = validateFan(fan);
+  if (validationError) {
+    return { ok: false, state: 'missing-config', message: validationError, checkedAt: new Date().toISOString() };
+  }
+  if (fan.ip) {
+    return testFanConnectionWithIp(fan, timeoutMs);
+  }
+  const ip = await resolveFanIpViaMdns(fan.mac);
+  if (!ip) {
+    return { ok: false, state: 'missing-config',
+      message: 'mDNS could not find this MAC address. Check the fan/network or enter its IP address.',
+      checkedAt: new Date().toISOString() };
+  }
+  const result = await testFanConnectionWithIp({ ...fan, ip }, timeoutMs);
+  return { ...result, resolvedIp: ip };
+}
+
+function testFanConnectionWithIp(fan: NormalizedFanConfig, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ConnectionDiagnostic> {
   const validationError = validateFan(fan);
   if (validationError) {
     return Promise.resolve({

@@ -260,7 +260,8 @@ function createFanCard(fan, index) {
   identityGrid.className = "settings-grid";
   identityGrid.append(
     createTextField(index, "name", "Fan name", fan.name || "", "Office Fan", "Display name for this fan in HomeKit."),
-    createTextField(index, "ip", "Fan IP address or hostname", fan.ip || "", "192.168.1.150 or fan.local", "IP address, DNS hostname, or mDNS .local hostname.")
+    createTextField(index, "ip", "Fan IP address or hostname", fan.ip || "", "192.168.1.150 or fan.local", "Optional with a MAC address: leave blank to discover via mDNS."),
+    createTextField(index, "mac", "MAC address", fan.mac || "", "20:F8:5E:00:00:00", "Optional for testing by IP; filled from the fan when available. Required to save or discover by MAC.")
   );
   card.appendChild(identityGrid);
 
@@ -279,13 +280,12 @@ function createFanCard(fan, index) {
   connectionActions.append(test);
   const connectionHelp = document.createElement("p");
   connectionHelp.className = "help compact-help";
-  connectionHelp.textContent = "Enter a name and IP address, then test the connection to detect supported features and fill in the MAC address. Choose your options below, then save.";
+  connectionHelp.textContent = "Enter a name and either an IP address or MAC address, then Test Connection to detect capabilities. IP testing can fill the MAC; MAC-only testing discovers the address. Choose options below, then save.";
   const connectionResult = document.createElement("p");
   connectionResult.className = "help compact-help connection-result";
   card.append(connectionActions, connectionHelp, connectionResult);
 
   card.appendChild(createSettingSection("Fan identity and connection", [
-    createTextField(index, "mac", "MAC address", fan.mac || "", "20:F8:5E:00:00:00", "Filled automatically when reported by the fan. If unavailable, enter it from the BAF app Wi-Fi settings before saving."),
     createNumberField(index, "probeFrequency", "Probe frequency (ms)", getValue(fan, "probeFrequency"), "Keep-alive and state refresh interval. Use 0 to disable probing.")
   ]));
 
@@ -575,9 +575,6 @@ function getFanErrors(fan) {
   if (!String(fan.name || "").trim()) {
     errors.push("name");
   }
-  if (!String(fan.ip || "").trim()) {
-    errors.push("ip");
-  }
   if (!isValidMac(fan.mac)) {
     errors.push("mac");
   }
@@ -854,8 +851,8 @@ async function testConnection(index, button) {
     showToast("error", "Fan not found.");
     return;
   }
-  if (!fan.name || !fan.ip) {
-    showToast("warning", "Enter a fan name and IP address or hostname before testing.");
+  if (!fan.name || (!fan.ip && !isValidMac(fan.mac))) {
+    showToast("warning", "Enter a fan name and either an IP address or valid MAC address before testing.");
     return;
   }
 
@@ -865,7 +862,7 @@ async function testConnection(index, button) {
   restoreButton(button, "Test Connection");
 
   updateConfigFromForm(false);
-  if (elements.fansList.querySelector(`[data-fan-index="${index}"]`) !== card || state.config.fans[index]?.ip !== fan.ip) {
+  if (elements.fansList.querySelector(`[data-fan-index="${index}"]`) !== card || state.config.fans[index]?.ip !== fan.ip || state.config.fans[index]?.mac !== fan.mac) {
     return; // The fan was removed, replaced, or its address changed during the test.
   }
 
@@ -1011,7 +1008,7 @@ function createDiagnosticCard(fan, index) {
     ["Detected Capabilities", describeLiveCapabilities(live)],
     ["Capability Exposure", describeLiveExposure(live)],
     ["Capability Guidance", describeLiveGuidance(live)],
-    ["Address", fan.ip || "missing"],
+    ["Address", fan.ip || live?.resolvedIp || "mDNS discovery"],
     ["MAC", fan.mac || "missing"],
     ["State Refresh", `${getValue(fan, "probeFrequency")} ms`],
     ["Lights", describeLights(fan)],
@@ -1211,7 +1208,7 @@ function highlightSuggestedFields(index, suggestions) {
 
 function clearLiveDiagnostic(index) {
   const diagnostic = state.diagnostics.devices[index];
-  if (diagnostic && diagnostic.fan.ip !== state.config.fans[index]?.ip) {
+  if (diagnostic && (diagnostic.fan.ip !== state.config.fans[index]?.ip || diagnostic.fan.mac !== state.config.fans[index]?.mac)) {
     state.diagnostics.devices[index] = undefined;
   } else if (diagnostic?.result) {
     diagnostic.result.settingsChanged = true;

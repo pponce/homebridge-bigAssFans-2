@@ -348,3 +348,35 @@ test("legacy dual-light settings migrate to exclusive with only supported layout
   assert.equal(page.host.saved[0].fans[0].dualLightModeControl, "exclusive");
   assert.equal(page.host.saved[0].fans[0].mac, existingFan.mac);
 });
+
+test("MAC-only setup can test and save while retaining automatic discovery", async () => {
+  const page = await openPage([]);
+  page.add();
+  page.edit(0, "name", "Discovered Fan");
+  page.edit(0, "ip", "");
+  page.edit(0, "mac", "AA:BB:CC:DD:EE:FF");
+  await page.settle();
+  assert.equal(page.host.saveEnabled, true);
+  page.cards()[0].querySelectorAll("button").find(b => b.textContent === "Test Connection").dispatch("click");
+  await page.settle();
+  assert.equal(page.host.requests[0].body.fan.ip, "");
+  assert.equal(page.host.requests[0].body.fan.mac, "AA:BB:CC:DD:EE:FF");
+  await page.hostSave();
+  assert.equal(page.host.saved[0].fans[0].ip, "");
+  assert.equal(page.host.saved[0].fans[0].mac, "AA:BB:CC:DD:EE:FF");
+});
+
+test("a discovery response for an old MAC cannot update the edited fan", async () => {
+  const gate = deferred();
+  const page = await openPage([], { requestGate: gate });
+  page.add();
+  page.edit(0, "name", "Fan");
+  page.edit(0, "ip", "");
+  page.edit(0, "mac", "AA:BB:CC:DD:EE:FF");
+  page.cards()[0].querySelectorAll("button").find(b => b.textContent === "Test Connection").dispatch("click");
+  page.edit(0, "mac", "11:22:33:44:55:66");
+  gate.resolve();
+  await page.settle();
+  assert.equal(page.cards()[0].querySelector(".pill").textContent, "Not tested");
+  assert.equal(page.cards()[0].querySelector('[data-fan-field="mac"]').value, "11:22:33:44:55:66");
+});

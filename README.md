@@ -4,9 +4,15 @@
   <img src="https://raw.githubusercontent.com/applemanj/homebridge-bigAssFans-2/main/es6.jpeg" alt="Big Ass Fans es6" />
 </p>
 
-# homebridge-bigassfans-2 v1.1.39
+# homebridge-bigassfans-2 v1.2.0
 
 `homebridge-bigassfans-2` is a Homebridge platform plugin for Big Ass Fans i6, es6, Haiku H/I Series, and Haiku L Series ceiling fans running firmware 3.0 or newer.
+
+> [!NOTE]
+> Firmware 3.0 or newer is required. The plugin speaks the protobuf-over-TCP protocol
+> introduced with firmware 3.0 and cannot control fans on older firmware. If your fan
+> is still on pre-3.0 firmware, either update it via the Big Ass Fans app or use the
+> older [`homebridge-bigAssFans`](https://github.com/sean9keenan/homebridge-bigAssFans) plugin instead.
 
 This fork builds on [`homebridge-i6-bigAssFans`](https://github.com/oogje/homebridge-i6-bigAssFans) by [@oogje](https://github.com/oogje), modernizing the plugin for current Homebridge releases with Fanv2 controls, improved reconnect/state handling, safer parsing, live diagnostics, and a custom Homebridge Settings UI.
 
@@ -24,19 +30,20 @@ See [Release Notes.md](https://github.com/applemanj/homebridge-bigAssFans-2/blob
 
 ## What's New
 
-**v1.1.39**
+**v1.2.0**
 
-- Removed the large platform-name panel from the normal admin UI flow.
-- Moved Save Settings and configuration status into the page header.
-- Improved status badge contrast for better readability in Homebridge dark mode.
-- Tightened this README for public npm/GitHub presentation.
+- Coordinated dual white lights with one White Ambiance dimmer, selectable Down/Up/Both modes, per-mode brightness memory, and separate light/mode accessories.
+- Includes upstream v1.2.0 mDNS discovery: leave `ip` blank and the plugin resolves the fan by its MAC address at startup.
+- The custom UI Test Connection also resolves fans via mDNS when no ip is configured.
+- Documented the firmware 3.0+ requirement and added a Siri fan-speed tip.
 
 ## Requirements
 
 - Homebridge 1.8.0 or newer, including Homebridge 2.0.
 - Node.js 20.15.1 or newer. Node 20, 22, 24, and 26 are tested in CI.
 - A supported Big Ass Fans / Haiku fan on the same network as Homebridge.
-- The fan's IP address or hostname and MAC address from the Big Ass Fans app Wi-Fi settings.
+- Fan firmware 3.0 or newer (see the note above).
+- The fan's MAC address from the Big Ass Fans app Wi-Fi settings. The IP address is optional — leave it blank to auto-discover the fan via mDNS.
 
 ## Installation
 
@@ -148,7 +155,7 @@ Common optional choices:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Display name for the fan in HomeKit. |
-| `ip` | Yes | IP address, DNS hostname, or mDNS `.local` hostname. |
+| `ip` | No | IP address, DNS hostname, or mDNS `.local` hostname. Leave blank to auto-discover via mDNS using the MAC address. |
 | `mac` | Yes | Fan MAC address from the Big Ass Fans app Wi-Fi settings. |
 
 ### Optional HomeKit Services
@@ -164,6 +171,7 @@ Common optional choices:
 | `showFanOccupancySensor` | `false` | Exposes fan occupancy when supported by the fan. |
 | `showLightOccupancySensor` | `false` | Exposes light occupancy when supported by the fan. |
 | `showStandbyLED` | `false` | Exposes night light / standby LED controls when supported by the fan. Hidden if `noLights` is enabled. |
+| `dualLightModeControl` | `exclusive` | Dual-light layouts: `exclusive` (Down/Up/Both), `channels` (Down+Up), or `both-up` (one Both/Up switch). |
 | `enableIncrementalButtons` | `false` | Adds momentary +/- buttons for brightness and fan speed. |
 
 ### Advanced Fields
@@ -224,6 +232,7 @@ The behavior is mapped correctly; only the labels are Apple's.
 
 - If Apple's Home app will not let you change the fan icon while grouped as one tile, switch to **Show as Separate Tiles**, change the icon, then switch back to **Show as Single Tile**.
 - If a fan has no light and no optional services, temporarily add `"showTemperature": false`, restart, change the icon, then remove that setting.
+- When asking Siri for a fan speed, percentages map to the fan's seven speeds at roughly 14% per step: "Siri, set the fan to 50%" lands on speed 4, and 100% is speed 7. For an exact speed, ask for a multiple of 14 (14% = speed 1, 28% = speed 2, and so on).
 
 ## Acknowledgments
 
@@ -240,6 +249,11 @@ Special thanks to:
 
 MIT
 
-## Coordinated dual-light controls
 
-Fans with both a downlight and uplight can use one white-light dimmer with selectable Down / Up / Both modes, or two combinable Down and Up switches. Each single-light mode remembers its brightness; Both uses Down's level. See [dual-light controls](docs/dual-light-controls.md) for configuration, color temperature, night-light behavior and device testing.
+## Coordinated lights and fan feedback
+
+See [dual-light controls](docs/dual-light-controls.md) for mode selection, brightness memory, night-light controls, capability testing, and migration to separate HomeKit accessories. Single-light fans retain their existing accessory layout. Existing upstream Both Lights services are replaced by the coordinated controls.
+
+See [fan speed controls](docs/fan-speed-controls.md) for saved-speed wake behavior, percentage settling, and the experimental HomeKit slider notifications. These fan changes apply to both single-light and dual-light fans.
+
+During setup, enter a name and either an IP address or a MAC address, then Test Connection before selecting options. Testing by IP can fill an empty MAC. Testing by MAC uses mDNS to resolve the address and then queries capabilities. Saving requires a MAC; a blank IP keeps automatic discovery enabled. Discovery runs at startup and during connection testing, not continuously after an address change. Fans with explicit addresses start without waiting for discovery.

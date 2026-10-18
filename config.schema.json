@@ -28,7 +28,6 @@
           "type": "object",
           "required": [
             "name",
-            "ip",
             "mac"
           ],
           "properties": {
@@ -41,9 +40,8 @@
             },
             "ip": {
               "title": "Fan IP Address Or Hostname",
-              "description": "IP address, DNS hostname, or mDNS .local hostname for the fan.",
-              "type": "string",
-              "minLength": 1
+              "description": "IP address or hostname. Leave blank to discover the fan via mDNS using its MAC address.",
+              "type": "string"
             },
             "mac": {
               "title": "MAC Address",

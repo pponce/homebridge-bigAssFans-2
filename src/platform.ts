@@ -1,5 +1,6 @@
 import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, Service, Characteristic } from 'homebridge';
 
+import { resolveFanIpViaMdns } from './discovery';
 import { AccessoryLayout } from './accessoryLayout';
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
@@ -55,7 +56,21 @@ export class BigAssFans_i6Platform implements DynamicPlatformPlugin {
           if (fan.mac) {
             configuredUUIDs.add(this.api.hap.uuid.generate(fan.mac));
           }
-          this.setupFan(fan);
+          if (fan.ip) {
+            this.setupFan(fan);
+          } else if (fan.name && fan.mac) {
+            // Known-address fans start immediately; unresolved child caches remain intact.
+            void resolveFanIpViaMdns(fan.mac, 10000).then(ip => {
+              if (ip) {
+                this.log.info('mDNS: found %s at %s', fan.name, ip);
+                this.setupFan({ ...fan, ip });
+              } else {
+                this.log.error('mDNS could not find %s. Check the MAC/network or enter an IP address.', fan.name);
+              }
+            });
+          } else {
+            this.setupFan(fan);
+          }
         }
       }
     } else if (this.config.fans) {
