@@ -429,8 +429,8 @@ async function testFanActiveDiagnosticsAreRecorded() {
   assert.equal(state.lastFanActiveRequestValue, 1);
   assert.notEqual(state.lastFanActiveRequestAt, 0);
   assert.match(infos.at(-1) ?? '', /active diagnostics: HomeKit requested Active=1/i);
-  assert.equal(socket.writes.length, 1);
-  assert.match(socket.writes[0].toString('hex'), /d80201/);
+  assert.equal(socket.writes.length, 2);
+  assert.match(socket.writes[1].toString('hex'), /d80201/);
 
   __test__.fanOnState('1', state as never);
 
@@ -448,7 +448,7 @@ async function testFanActiveOptimisticallyUpdatesHomeKitState() {
   await __test__.invokeSetFanActive(state as never, 1);
 
   assert.deepEqual(state.fanService.updates.at(-2), { characteristic: 'Active', value: 1 });
-  assert.deepEqual(state.fanService.updates.at(-1), { characteristic: 'CurrentFanState', value: 1 });
+  assert.deepEqual(state.fanService.updates.at(-1), { characteristic: 'CurrentFanState', value: 2 });
 }
 
 async function testDuplicateFanActiveWriteIsSuppressed() {
@@ -461,190 +461,118 @@ async function testDuplicateFanActiveWriteIsSuppressed() {
   await __test__.invokeSetFanActive(state as never, 1);
   await __test__.invokeSetFanActive(state as never, 1);
 
-  assert.equal(socket.writes.length, 1);
+  assert.equal(socket.writes.length, 2);
   assert.match(infos.at(-1) ?? '', /suppressing duplicate Active=1/i);
 }
 
-async function testRotationSpeedDiagnosticsAreRecorded() {
-  const { state, infos } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-  state.enableDebugPort = true;
-
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 57);
-  });
-
-  assert.equal(state.lastRotationSpeedRequestPercent, 57);
-  assert.equal(state.lastRotationSpeedRequestDeviceSpeed, 4);
-  assert.notEqual(state.lastRotationSpeedRequestAt, 0);
-  assert.match(infos.at(-1) ?? '', /HomeKit requested 57% -> device speed 4/i);
-
-  __test__.fanRotationSpeed('4', state as never);
-
-  assert.equal(state.lastRotationSpeedRequestAt, 0);
-  assert.match(infos.at(-1) ?? '', /fan reported 4 \(57%\)/i);
-}
-
-async function testRotationSpeedOptimisticallySnapsHomeKitState() {
-  const { state } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-  state.fanStates.Active = 0;
-  state.fanStates.CurrentFanState = 0;
-
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 69);
-  });
-
-  assert.deepEqual(state.fanService.updates.at(-3), { characteristic: 'RotationSpeed', value: 71 });
-  assert.deepEqual(state.fanService.updates.at(-2), { characteristic: 'Active', value: 1 });
-  assert.deepEqual(state.fanService.updates.at(-1), { characteristic: 'CurrentFanState', value: 2 });
-}
-
-async function testRotationSpeedChangeSendsSingleWrite() {
-  const { state } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-  state.fanStates.TargetFanState = 1;
-  state.fanStates.Active = 0;
-  state.fanStates.CurrentFanState = 0;
-  state.fanStates.RotationSpeed = 0;
-
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 57);
-  });
-
-  assert.equal(state.fanStates.TargetFanState, 1);
-  assert.equal(socket.writes.length, 1);
-  assert.match(socket.writes[0].toString('hex'), /f00204/);
-}
-
-async function testRotationSpeedIgnoresBriefStaleEchoes() {
-  const { state, infos } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-  state.enableDebugPort = true;
-
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 35);
-  });
-
-  __test__.fanRotationSpeed('3', state as never);
-  assert.equal(state.fanStates.RotationSpeed, 2);
-  assert.match(infos.at(-1) ?? '', /ignoring fan report 3/i);
-
-  __test__.fanRotationSpeed('2', state as never);
-  assert.equal(state.fanStates.RotationSpeed, 2);
-  assert.equal(state.expectedRotationSpeed, undefined);
-}
-
-async function testRotationSpeedDragBurstOnlyWritesFinalSpeed() {
-  const { state } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-
-  const originalSetTimeout = global.setTimeout;
-  let timeoutCallback: (() => void) | undefined;
-  global.setTimeout = (((
-    callback: (...args: never[]) => void,
-    _delay?: number,
-    ..._args: never[]
-  ) => {
-    timeoutCallback = () => callback();
-    return { ref() { return this; }, unref() { return this; } } as ReturnType<typeof setTimeout>;
-  }) as unknown as typeof setTimeout);
-
+async function testFanSpeedFeedbackAndRestore() {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10000 });
   try {
-    await __test__.invokeSetRotationSpeed(state as never, 68);
-    await __test__.invokeSetRotationSpeed(state as never, 43);
-
-    assert.equal(socket.writes.length, 0);
-    timeoutCallback?.();
-
+    const { state } = createTestAccessoryState();
+    const socket = new FakeSocket();
+    state.client = socket;
+    state.fanStates.Active = 1;
+    __test__.fanRotationSpeed('4', state as never);
+    await __test__.invokeSetRotationSpeed(state as never, 40);
+    mock.timers.tick(125);
     assert.equal(socket.writes.length, 1);
     assert.match(socket.writes[0].toString('hex'), /f00203/);
-    assert.deepEqual(state.fanService.updates.at(-3), { characteristic: 'RotationSpeed', value: 43 });
-  } finally {
-    global.setTimeout = originalSetTimeout;
-  }
-}
+    assert.equal(state.fanService.updates.filter(u => u.characteristic === 'RotationSpeed').at(-1)?.value, 40);
+    __test__.fanRotationSpeed('3', state as never);
+    assert.equal(await BigAssFans_i6PlatformAccessory.prototype.getRotationSpeed.call(state as never), 40);
+    mock.timers.tick(1374);
+    assert.equal(state.fanService.updates.filter(u => u.characteristic === 'RotationSpeed').at(-1)?.value, 40);
+    mock.timers.tick(1);
+    assert.equal(state.fanService.updates.at(-1)?.value, 43);
 
-async function testLowNonZeroRotationSpeedMapsToSpeedOne() {
-  const { state } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
+    // New slider input restarts the display delay and coalesces hardware writes.
+    await __test__.invokeSetRotationSpeed(state as never, 68);
+    await __test__.invokeSetRotationSpeed(state as never, 50);
+    mock.timers.tick(125);
+    assert.match(socket.writes.at(-1)!.toString('hex'), /f00204/);
+    __test__.fanRotationSpeed('4', state as never);
+    mock.timers.tick(1375);
+    assert.equal(state.fanService.updates.at(-1)?.value, 57);
 
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 1);
-  });
+    // A different external value is never hidden behind a two-second ignore window.
+    await __test__.invokeSetRotationSpeed(state as never, 70);
+    mock.timers.tick(125);
+    __test__.fanRotationSpeed('5', state as never);
+    __test__.fanRotationSpeed('2', state as never);
+    assert.equal(state.fanStates.RotationSpeed, 2);
+    assert.equal(state.fanService.updates.filter(u => u.characteristic === 'RotationSpeed').at(-1)?.value, 29);
 
-  assert.equal(state.lastRotationSpeedRequestDeviceSpeed, 1);
-  assert.match(socket.writes[0].toString('hex'), /f00201/);
-  assert.deepEqual(state.fanService.updates.at(-3), { characteristic: 'RotationSpeed', value: 14 });
-}
+    // An old Off report does not discard a queued slider command.
+    await __test__.invokeSetRotationSpeed(state as never, 40);
+    __test__.fanOnState('0', state as never);
+    mock.timers.tick(125);
+    assert.match(socket.writes.at(-1)!.toString('hex'), /f00203/);
+    const writes = socket.writes.length;
+    mock.timers.tick(300);
+    assert.equal(socket.writes.length, writes + 1, 'Missing speed feedback triggers a readback');
+    assert.match(socket.writes.at(-1)!.toString('hex'), /12021a00/);
+    __test__.fanRotationSpeed('3', state as never);
 
-async function testMatchingFanReportDuringDebounceIsAccepted() {
-  const { state, infos } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-  state.enableDebugPort = true;
+    // Explicit Off cancels a pending speed request.
+    await __test__.invokeSetRotationSpeed(state as never, 80);
+    await __test__.invokeSetFanActive(state as never, 0);
+    const offWrites = socket.writes.length;
+    mock.timers.tick(2000);
+    assert.equal(socket.writes.length, offWrites);
 
-  const originalSetTimeout = global.setTimeout;
-  const originalClearTimeout = global.clearTimeout;
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  let timeoutCallback: (() => void) | undefined;
-  global.setTimeout = (((
-    callback: (...args: never[]) => void,
-    _delay?: number,
-    ..._args: never[]
-  ) => {
-    timeoutHandle = { ref() { return this; }, unref() { return this; } } as ReturnType<typeof setTimeout>;
-    timeoutCallback = () => callback();
-    return timeoutHandle;
-  }) as unknown as typeof setTimeout);
-  global.clearTimeout = (((handle?: ReturnType<typeof setTimeout>) => {
-    if (handle === timeoutHandle) {
-      timeoutCallback = undefined;
+    const persisted = createDualLightTestState();
+    persisted.accessory.context = Object.assign(persisted.accessory.context, { fanSpeedMemory: 4 });
+    persisted.state.fanService = new FakeService('Fanv2') as never;
+    persisted.state.fanStates = { Active: 0, CurrentFanState: 0, TargetFanState: 0, RotationSpeed: 0,
+      RotationDirection: 0, homeShieldUp: false };
+    await __test__.invokeSetFanActive(persisted.state, 1);
+    const persistedSocket = persisted.state.client as unknown as FakeSocket;
+    assert.match(persistedSocket.writes[0].toString('hex'), /f00204/, 'Restore works from persisted memory');
+    await __test__.invokeSetFanActive(persisted.state, 0);
+    await __test__.invokeSetRotationSpeed(persisted.state, 100);
+    mock.timers.tick(125);
+    assert.match(persistedSocket.writes.at(-1)!.toString('hex'), /f00207/, 'Speed-only maximum from Off remains available');
+    await __test__.invokeSetFanActive(persisted.state, 0);
+
+    for (const speedFirst of [true, false]) {
+      const fixture = createTestAccessoryState();
+      const fan = fixture.state;
+      const connection = new FakeSocket();
+      fan.client = connection;
+      fan.fanStates.Active = 1;
+      __test__.fanRotationSpeed('4', fan as never);
+      await __test__.invokeSetFanActive(fan as never, 0);
+      connection.writes.length = 0;
+      if (speedFirst) {
+        await __test__.invokeSetRotationSpeed(fan as never, 100);
+        await __test__.invokeSetFanActive(fan as never, 1);
+      } else {
+        await __test__.invokeSetFanActive(fan as never, 1);
+        await __test__.invokeSetRotationSpeed(fan as never, 100);
+      }
+      mock.timers.tick(125);
+      assert.ok(connection.writes.every(w => !/f00207/.test(w.toString('hex'))), 'Power-on must not send maximum speed');
+      assert.match(connection.writes[0].toString('hex'), /f00204/);
+      assert.match(connection.writes[1].toString('hex'), /d80201/);
+      __test__.fanRotationSpeed('4', fan as never);
+      mock.timers.tick(1500);
+      await __test__.invokeSetRotationSpeed(fan as never, 100);
+      mock.timers.tick(125);
+      assert.match(connection.writes.at(-1)!.toString('hex'), /f00207/, 'Explicit maximum while running must work');
+      __test__.fanRotationSpeed('7', fan as never);
+      await __test__.invokeSetRotationSpeed(fan as never, 0);
+      mock.timers.tick(125);
+      assert.match(connection.writes.at(-1)!.toString('hex'), /d80200/, 'Zero means power off, not minimum-speed memory');
+      __test__.fanOnState('0', fan as never);
+      __test__.fanRotationSpeed('7', fan as never);
+      assert.equal(fan.fanStates.Active, 0, 'A retained speed setpoint must not undo manual Off');
+      await __test__.invokeSetFanActive(fan as never, 1);
+      assert.match(connection.writes.at(-2)!.toString('hex'), /f00207/, 'On restores the last actual nonzero speed');
+      await __test__.invokeSetFanActive(fan as never, 0);
     }
-  }) as unknown as typeof clearTimeout);
-
-  try {
-    await __test__.invokeSetRotationSpeed(state as never, 1);
-    __test__.fanRotationSpeed('1', state as never);
-
-    assert.equal(timeoutCallback, undefined);
-    assert.equal(socket.writes.length, 0);
-    assert.equal(state.fanStates.RotationSpeed, 1);
-    assert.equal(state.lastRotationSpeedRequestAt, 0);
-    assert.doesNotMatch(infos.join('\n'), /ignoring fan report 1/i);
-    assert.match(infos.at(-1) ?? '', /fan reported 1 \(14%\)/i);
   } finally {
-    global.setTimeout = originalSetTimeout;
-    global.clearTimeout = originalClearTimeout;
+    mock.timers.reset();
   }
-}
-
-async function testFanOffClearsPendingSpeedDiagnostics() {
-  const { state, infos } = createTestAccessoryState();
-  const socket = new FakeSocket();
-  state.client = socket;
-
-  await withImmediateTimeouts(async () => {
-    await __test__.invokeSetRotationSpeed(state as never, 31);
-  });
-
-  assert.notEqual(state.lastRotationSpeedRequestAt, 0);
-
-  __test__.fanOnState('0', state as never);
-
-  assert.equal(state.lastRotationSpeedRequestAt, 0);
-  assert.equal(state.lastRotationSpeedRequestPercent, undefined);
-  assert.equal(state.lastRotationSpeedRequestDeviceSpeed, undefined);
-  assert.equal(state.expectedRotationSpeed, undefined);
-
-  __test__.fanRotationSpeed('0', state as never);
-  assert.doesNotMatch(infos.at(-1) ?? '', /8161ms after HomeKit requested/i);
 }
 
 function testFanUpdatesAreNotBlockedByUnknownTargetBulb() {
@@ -1427,14 +1355,7 @@ async function main() {
   await testFanActiveDiagnosticsAreRecorded();
   await testFanActiveOptimisticallyUpdatesHomeKitState();
   await testDuplicateFanActiveWriteIsSuppressed();
-  await testRotationSpeedDiagnosticsAreRecorded();
-  await testRotationSpeedOptimisticallySnapsHomeKitState();
-  await testRotationSpeedChangeSendsSingleWrite();
-  await testRotationSpeedIgnoresBriefStaleEchoes();
-  await testRotationSpeedDragBurstOnlyWritesFinalSpeed();
-  await testLowNonZeroRotationSpeedMapsToSpeedOne();
-  await testMatchingFanReportDuringDebounceIsAccepted();
-  await testFanOffClearsPendingSpeedDiagnostics();
+  await testFanSpeedFeedbackAndRestore();
   testFanUpdatesAreNotBlockedByUnknownTargetBulb();
   testColorTemperatureCapabilityImpliesDownlight();
   testDownlightOverrideWinsOverInference();

@@ -47,6 +47,7 @@ export interface BigAssFansAccessoryContext {
   lightTile?: LightTile;
   whiteLightMemory?: { down?: number; up?: number };
   nightLightBrightness?: number;
+  fanSpeedMemory?: number;
 }
 
 export interface BigAssFansPlatformContext {
