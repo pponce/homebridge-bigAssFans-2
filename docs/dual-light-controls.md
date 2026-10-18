@@ -75,3 +75,11 @@ Automated tests cannot establish undocumented firmware behavior. Check these on 
 9. Restart Homebridge and confirm memory survives. Disconnect the fan and confirm commands fail, then recover after reconnection.
 10. Check another fan with one light and a device without a night light: neither should gain unsupported tiles.
 
+
+### Zero brightness and restoring the light
+
+Setting the White Light dimmer to zero sends Off. Turning it on again (including with Siri) restores the selected mode's remembered brightness. Both shares Down's memory; Up has its own. Waking the light explicitly sends its selected mode before brightness and power.
+
+HomeKit does not report when a slider drag ends. Positive brightness writes less than 1.2 seconds apart are treated as one gesture. If that gesture ends in zero or Off, the brightness from before the gesture is retained instead of an intermediate value such as 1%. Pausing at a positive level for 1.2 seconds saves it, including an intentional 1%. A pause during a slow drag can therefore save an intermediate level. Different brightness values reported by the fan remain authoritative.
+
+Mode-only feedback updates the HomeKit mode switches immediately, even when brightness arrives in a later frame. The plugin requests refreshed state without writing back over external changes.

@@ -98,6 +98,8 @@ async function main() {
   assert.equal(light.state.brightness, 33);
   await apply(light, [light.select(1, true), light.setBrightness(44)]);
   assert.equal(light.state.brightness, 44);
+  // This is a settled level, not a slider gesture ending in Off.
+  await new Promise(resolve => setTimeout(resolve, 1250));
   await apply(light, [light.select(1, false)]);
   assert.equal(light.state.selection, 1);
   await apply(light, [light.setPower(false)]);
@@ -108,6 +110,8 @@ async function main() {
 
   // App/remote snapshots replace HomeKit state; a selector-only report must not overwrite brightness memory.
   light.report({ selection: 2 });
+  assert.equal(light.channelOn(1), false, 'A selector-only report immediately clears Down');
+  assert.equal(light.channelOn(2), true);
   assert.equal(light.memory.up, 33);
   light.report({ brightness: 80, power: 1 });
   assert.equal(light.state.selection, 2);
@@ -198,6 +202,50 @@ async function main() {
   // Push feedback cancels readback queries, even when the returned value differs.
   mock.timers.enable({ apis: ['setTimeout'] });
   try {
+    for (const selection of [0, 1, 2] as const) {
+      const gesture = harness();
+      gesture.light.report({ selection, power: 1, brightness: 65 });
+      for (const level of [40, 15, 1]) {
+        await apply(gesture.light, [gesture.light.setBrightness(level)]);
+        mock.timers.tick(200);
+      }
+      await apply(gesture.light, [gesture.light.setBrightness(0)], { power: 0, brightness: 1 });
+      assert.equal(gesture.light.state.power, 0);
+      await apply(gesture.light, [gesture.light.setPower(true)]);
+      assert.equal(gesture.light.state.brightness, 65, 'On restores the level before the drag to zero');
+      assert.equal(gesture.light.state.selection, selection);
+      assert.deepEqual(gesture.commands.at(-1), [
+        { field: 82, value: selection }, { field: 69, value: 65 }, { field: 68, value: 1 },
+      ]);
+      await apply(gesture.light, [gesture.light.setBrightness(1)]);
+      mock.timers.tick(1300);
+      await apply(gesture.light, [gesture.light.setPower(false)]);
+      await apply(gesture.light, [gesture.light.setPower(true)]);
+      assert.equal(gesture.light.state.brightness, 1, 'A settled 1% is a valid saved level');
+      gesture.light.disconnect();
+    }
+    const splitOff = harness();
+    await apply(splitOff.light, [splitOff.light.setBrightness(1)]);
+    const off = splitOff.light.setBrightness(0);
+    splitOff.light.flush();
+    await off;
+    splitOff.light.report({ brightness: 1 });
+    splitOff.light.report({ power: 0 });
+    await apply(splitOff.light, [splitOff.light.setPower(true)]);
+    assert.equal(splitOff.light.state.brightness, 25, 'Split off feedback must preserve pre-gesture memory');
+    splitOff.light.disconnect();
+
+    const wake = harness();
+    wake.light.report({ selection: 0, power: 0, brightness: 0 });
+    await apply(wake.light, [wake.light.setBrightness(55)]);
+    assert.deepEqual(wake.commands.at(-1), [
+      { field: 82, value: 0 }, { field: 69, value: 55 }, { field: 68, value: 1 },
+    ]);
+    wake.light.report({ selection: 2 });
+    assert.equal(wake.light.channelOn(1), false);
+    assert.equal(wake.light.channelOn(2), true);
+    wake.light.disconnect();
+
     const feedback = harness();
     const change = feedback.light.setBrightness(60);
     feedback.light.flush();

@@ -32,6 +32,21 @@ export class DualLightCoordinator {
   private debounce?: ReturnType<typeof setTimeout>;
   private confirmation?: ReturnType<typeof setTimeout>;
   private refreshTimer?: ReturnType<typeof setTimeout>;
+  private sliderTimer?: ReturnType<typeof setTimeout>;
+  private sliderMemory?: LightMemory;
+  private sliderValue?: number;
+
+  private finishSlider(restore = false) {
+    clearTimeout(this.sliderTimer);
+    if (restore && this.sliderMemory) {
+      this.memory = { ...this.sliderMemory };
+      if (this.memoryBeforeWrite) {
+        this.memoryBeforeWrite = { ...this.sliderMemory };
+      }
+    }
+    this.sliderMemory = undefined;
+    this.sliderValue = undefined;
+  }
 
   constructor(
     memory: LightMemory | undefined,
@@ -49,7 +64,7 @@ export class DualLightCoordinator {
   }
 
   get persistedMemory(): LightMemory {
-    return this.memoryBeforeWrite ?? this.memory;
+    return this.sliderMemory ?? this.memoryBeforeWrite ?? this.memory;
   }
 
   get view(): WhiteLightState {
@@ -81,6 +96,9 @@ export class DualLightCoordinator {
   }
 
   setPower(on: boolean): Promise<void> {
+    if (!on) {
+      this.finishSlider(true);
+    }
     return this.request({ power: on ? 1 : 0 });
   }
 
@@ -92,7 +110,24 @@ export class DualLightCoordinator {
     if (!Number.isFinite(value)) {
       return Promise.reject(new Error('Invalid brightness'));
     }
-    return this.request({ brightness: Math.max(0, Math.min(100, Math.round(value))) });
+    if (!this.ready) {
+      return Promise.reject(new Error('Waiting for the fan to report its lighting state'));
+    }
+    const brightness = Math.max(0, Math.min(100, Math.round(value)));
+    if (brightness === 0) {
+      this.finishSlider(true);
+    } else {
+      this.sliderMemory ??= { ...this.persistedMemory };
+      this.sliderValue = brightness;
+      clearTimeout(this.sliderTimer);
+      // HomeKit has no slider-release event. Treat nearby writes as one gesture.
+      this.sliderTimer = setTimeout(() => {
+        this.finishSlider();
+        this.changed();
+      }, 1200);
+      this.sliderTimer.unref?.();
+    }
+    return this.request({ brightness });
   }
 
   setTemperature(mired: number): Promise<void> {
@@ -117,6 +152,9 @@ export class DualLightCoordinator {
     if (Object.keys(intent).length === 0) {
       return Promise.resolve();
     }
+    if (intent.selection !== undefined && intent.selection !== this.view.selection) {
+      this.finishSlider();
+    }
     this.intent = { ...this.intent, ...intent };
     clearTimeout(this.debounce);
     this.debounce = setTimeout(() => this.flush(), 80);
@@ -131,7 +169,8 @@ export class DualLightCoordinator {
     const previous = this.state;
     const commands: LightCommand[] = [];
     const changedMode = next.selection !== previous.selection;
-    if (changedMode) {
+    const waking = next.power > 0 && next.brightness > 0 && (previous.power === 0 || previous.brightness === 0);
+    if (changedMode || waking) {
       commands.push({ field: 82, value: next.selection });
     }
     if (next.power > 0 && next.brightness > 0 &&
@@ -141,7 +180,7 @@ export class DualLightCoordinator {
     if (next.kelvin !== undefined && next.kelvin !== previous.kelvin) {
       commands.push({ field: 71, value: next.kelvin });
     }
-    if (next.power !== previous.power || changedMode || this.intent.brightness === 0) {
+    if (next.power !== previous.power || changedMode || waking || this.intent.brightness === 0) {
       commands.push({ field: 68, value: next.power });
     }
     this.intent = {};
@@ -192,8 +231,17 @@ export class DualLightCoordinator {
 
   /** Apply a complete frame together so a mode change cannot corrupt another mode's memory. */
   report(update: Partial<WhiteLightState>) {
+    if (this.sliderMemory && ((update.selection !== undefined && update.selection !== this.state.selection) ||
+        (update.brightness !== undefined && update.brightness > 0 && update.brightness !== this.sliderValue && update.power !== 0))) {
+      // A different device value is authoritative, including BAF app changes.
+      this.finishSlider();
+    }
     if (update.selection !== undefined && update.selection !== this.reported.selection && update.brightness === undefined) {
       delete this.reported.brightness;
+      // Selection is independently authoritative; do not leave switches stale
+      // while waiting for the selected mode's brightness in another frame.
+      this.state.selection = update.selection;
+      this.changed();
       this.scheduleRefresh();
     }
     this.reported = { ...this.reported, ...update };
@@ -229,6 +277,9 @@ export class DualLightCoordinator {
   }
 
   private remember() {
+    if (this.expected?.power === 0 && this.awaiting.has('power')) {
+      return;
+    }
     const key = this.state.selection === 2 ? 'up' : 'down';
     // An off-state mode report may carry the previous mode's output level.
     // Preserve known per-mode levels until the light is actually operating.
@@ -238,6 +289,7 @@ export class DualLightCoordinator {
   }
 
   disconnect() {
+    this.finishSlider(true);
     clearTimeout(this.debounce);
     clearTimeout(this.confirmation);
     clearTimeout(this.refreshTimer);
