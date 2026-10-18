@@ -24,6 +24,41 @@ async function apply(light: DualLightCoordinator, changes: Promise<void>[], actu
 }
 
 async function main() {
+  // Mode switches describe selection even at zero brightness, independently of power.
+  for (const power of [0, 1, 2] as const) {
+    for (const selection of [0, 1, 2] as const) {
+      for (const channel of [1, 2] as const) {
+        for (const on of [false, true]) {
+          const modes = harness();
+          modes.light.report({ selection, power, brightness: power === 0 ? 0 : 25 });
+          assert.equal(modes.light.channelOn(1), selection === 0 || selection === 1);
+          assert.equal(modes.light.channelOn(2), selection === 0 || selection === 2);
+          const expected = on ? (selection === 0 || selection !== channel ? 0 : channel)
+            : selection === 0 || selection === channel ? (channel === 1 ? 2 : 1) : selection;
+          await apply(modes.light, [modes.light.setChannel(channel, on)]);
+          assert.equal(modes.light.state.selection, expected);
+          assert.equal(modes.light.state.power, power);
+          assert.ok(modes.light.channelOn(1) || modes.light.channelOn(2));
+          if (power === 0) {
+            assert.ok(modes.commands.flat().every(command => command.field !== 69));
+            assert.ok(modes.commands.flat().filter(command => command.field === 68).every(command => command.value === 0));
+          }
+          modes.light.disconnect();
+        }
+      }
+    }
+  }
+  const offMode = harness();
+  await apply(offMode.light, [offMode.light.setBrightness(0)], { power: 0, brightness: 0 });
+  assert.equal(offMode.light.channelOn(1), true);
+  await apply(offMode.light, [offMode.light.select(2, true)], { power: 0, brightness: 25 });
+  assert.deepEqual(offMode.commands.at(-1), [{ field: 82, value: 2 }, { field: 68, value: 0 }]);
+  assert.equal(offMode.light.memory.up, 75, 'An off-state report must not overwrite Up memory with Down brightness');
+  await apply(offMode.light, [offMode.light.setPower(true)]);
+  assert.equal(offMode.light.state.brightness, 75);
+  assert.equal(offMode.light.state.selection, 2);
+  offMode.light.disconnect();
+
   const { light, commands } = harness();
   await apply(light, [light.select(2, true)]);
   assert.equal(light.state.brightness, 75);
@@ -49,7 +84,8 @@ async function main() {
   assert.equal(light.channelOn(1), true);
   assert.equal(light.channelOn(2), false);
   await apply(light, [light.setChannel(1, false)]);
-  assert.equal(light.state.power, 0);
+  assert.equal(light.state.power, 1);
+  assert.equal(light.state.selection, 2);
   assert.equal(light.channelOn(1), false);
   await apply(light, [light.setChannel(2, true)]);
   assert.equal(light.state.brightness, 60);

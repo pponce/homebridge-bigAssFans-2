@@ -195,7 +195,7 @@
             },
             "dualLightModeControl": {
               "title": "Dual-light mode controls",
-              "description": "Only applies to fans with both white lights. Choose three mode selectors, combinable Down/Up switches, or both-up: one Both Lights switch (on = Both, off = Up).",
+              "description": "For fans with both white lights. Mode switches retain selection independently of light power. With channels, deselecting the last switch selects the other. With both-up, one switch selects Both when on and Up when off.",
               "type": "string",
               "enum": [
                 "exclusive",

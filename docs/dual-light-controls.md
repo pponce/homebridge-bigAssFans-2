@@ -6,10 +6,12 @@ When adding a fan, enter its name and IP address or hostname, then use **Test Co
 
 Choose **Dual-light mode controls** in the plugin settings:
 
-- **Down / Up / Both — one selected** (`exclusive`, default): selecting a mode turns the white light on. Turning the selected mode switch off leaves it selected; use White Light to turn the light off. The selected mode remains visible while the light is off.
-- **Down + Up — combine switches** (`channels`): Down on / Up off selects Down; Up on / Down off selects Up; both on selects Both; both off turns the white light off. Turning White Light back on restores the last selected mode.
-- **Both / Up — single switch** (`both-up`): one **Both Lights** switch. On selects Both; Off selects Up only. Selecting either mode turns the white light on; use the White Light tile to turn it off. The switch retains the selected mode while the light is off. Both restores Down/Both's remembered brightness and Up restores Up's. There is no Down-only selector in this layout. Changes made in the BAF app or with the remote are still honored, including Down-only; select Both Lights on or off to return to Both or Up.
+- **Down / Up / Both — one selected** (`exclusive`, default): exactly one mode remains selected, including while the light is off. Turning the selected mode switch off leaves it selected.
+- **Down + Up — combine switches** (`channels`): Down on / Up off selects Down; Up on / Down off selects Up; both on selects Both. Turning off the last selected switch turns on the other switch, so a valid mode always remains selected.
+- **Both / Up — single switch** (`both-up`): one **Both Lights** switch. On selects Both; Off selects Up only. The switch retains the selected mode while the light is off. Both restores Down/Both's remembered brightness and Up restores Up's. There is no Down-only selector in this layout. Changes made in the BAF app or with the remote are still honored, including Down-only; select Both Lights on or off to return to Both or Up.
 - **Legacy separate dimmers** (`legacy`): retain the old layout.
+
+In all coordinated layouts, mode switches select which lights the White Light dimmer controls. They do not control power. Turning White Light off or dimming it to zero retains the selected mode. Changing modes while off leaves the lights off; turning White Light on restores the selected mode's brightness. Mode changes while off do not send a brightness command, and off-state reports do not overwrite an existing remembered brightness.
 
 Down and Up remember separate brightness levels. Entering Both restores Down's remembered level. Dimming in Both changes the shared output and Down's memory, leaving Up's memory alone. Memory is kept per accessory in Homebridge's cache and survives restarts. Until an individual mode has been used, it inherits the current level. Removing the accessory/cache also removes its brightness memory.
 
@@ -64,7 +66,7 @@ Automated tests cannot establish undocumented firmware behavior. Check these on 
 1. Set Down to 25%, Up to 75%, then alternate modes. Each should return to its own level.
 2. Enter Both from Up. Expect 25% on both emitters. Set Both to 45%, then check Down is 45% and Up is still 75%.
 3. In the two-switch layout, start at Both 67% and turn Up off. Down must remain lit at 67%.
-4. Turn both switches off, then select each combination. Confirm the main tile and physical light agree.
+4. With only Down selected, turn Down off: Up should become selected. Reverse the test. Turn White Light off, change modes, and confirm the lights remain off while the switches show the new mode. Turn White Light on and check the selected mode and restored brightness.
 5. Change modes and brightness through the remote and BAF app; check all HomeKit switches update together.
 6. Run a scene that selects a mode and brightness together. Repeat with a different mode/level.
 7. Move HomeKit's white-temperature picker between the app's presets. Inspect the returned value and whether the hardware rounds it.

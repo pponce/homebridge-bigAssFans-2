@@ -1041,6 +1041,19 @@ async function testBothUpSingleSwitchLayout() {
     assert.equal(light.state.power, 0);
     assert.equal(both.values.get('On'), true, 'Mode is retained when White Light turns off');
 
+    const selectUpWhileOff = both.setters.get('On')!(false);
+    light.flush();
+    await selectUpWhileOff;
+    assert.equal(light.state.power, 0);
+    assert.equal(light.state.selection, 2);
+    assert.equal(both.values.get('On'), false);
+    const selectBothWhileOff = both.setters.get('On')!(true);
+    light.flush();
+    await selectBothWhileOff;
+    assert.equal(light.state.power, 0);
+    assert.equal(light.state.selection, 0);
+    assert.equal(both.values.get('On'), true);
+
     const socket = state.client as unknown as FakeSocket;
     const writes = socket.writes.length;
     __test__.onData(state, reportFrame([[82, 2], [68, 1], [69, 60]]));

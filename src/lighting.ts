@@ -49,23 +49,24 @@ export class DualLightCoordinator {
   get view(): WhiteLightState {
     const selection = this.intent.selection ?? this.state.selection;
     const remembered = this.memory[selection === 2 ? 'up' : 'down'];
-    const turningOn = (this.intent.power !== undefined && this.intent.power > 0) || this.intent.selection !== undefined;
-    const restoring = selection !== this.state.selection || (turningOn && this.state.brightness === 0);
+    const turningOn = this.intent.power !== undefined && this.intent.power > 0;
+    const restoring = selection !== this.state.selection || (turningOn && (this.state.power === 0 || this.state.brightness === 0));
     const brightness = this.intent.brightness ?? (restoring ? (remembered ?? (this.state.brightness || 50)) : this.state.brightness);
     const power = this.intent.brightness === 0 ? 0 : this.intent.power ??
-      (this.intent.selection !== undefined || this.intent.brightness !== undefined ? 1 : this.state.power);
+      (this.intent.brightness !== undefined ? 1 : this.state.power);
     return { ...this.state, selection, power, brightness, kelvin: this.intent.kelvin ?? this.state.kelvin };
   }
 
   channelOn(channel: 1 | 2): boolean {
     const view = this.view;
-    return view.power !== 0 && view.brightness > 0 && (view.selection === 0 || view.selection === channel);
+    return view.selection === 0 || view.selection === channel;
   }
 
   setChannel(channel: 1 | 2, on: boolean): Promise<void> {
     const down = channel === 1 ? on : this.channelOn(1);
     const up = channel === 2 ? on : this.channelOn(2);
-    return this.request(down || up ? { selection: down && up ? 0 : down ? 1 : 2, power: 1 } : { power: 0 });
+    // Keep a valid mode: deselecting the last channel selects the other channel.
+    return this.request({ selection: down && up ? 0 : down ? 1 : up ? 2 : channel === 1 ? 2 : 1 });
   }
 
   select(selection: LightSelection, on: boolean): Promise<void> {
@@ -127,7 +128,8 @@ export class DualLightCoordinator {
     if (changedMode) {
       commands.push({ field: 82, value: next.selection });
     }
-    if (next.brightness > 0 && (changedMode || next.brightness !== previous.brightness || (next.power > 0 && previous.power === 0))) {
+    if (next.power > 0 && next.brightness > 0 &&
+        (changedMode || next.brightness !== previous.brightness || previous.power === 0)) {
       commands.push({ field: 69, value: next.brightness });
     }
     if (next.kelvin !== undefined && next.kelvin !== previous.kelvin) {
@@ -221,8 +223,11 @@ export class DualLightCoordinator {
   }
 
   private remember() {
-    if (this.state.brightness > 0) {
-      this.memory[this.state.selection === 2 ? 'up' : 'down'] = this.state.brightness;
+    const key = this.state.selection === 2 ? 'up' : 'down';
+    // An off-state mode report may carry the previous mode's output level.
+    // Preserve known per-mode levels until the light is actually operating.
+    if (this.state.brightness > 0 && (this.state.power !== 0 || this.memory[key] === undefined)) {
+      this.memory[key] = this.state.brightness;
     }
   }
 

@@ -471,7 +471,7 @@ function createModeSelect(index, value) {
     select.appendChild(option);
   });
   select.value = value;
-  wrapper.append(select, createSmall("Used only when both lights are present. Both / Up uses one Both Lights switch: on = both, off = up. Both mode shares brightness and restores Down's level."));
+  wrapper.append(select, createSmall("Used only when both lights are present. Mode switches stay selected while the light is off and do not turn it on. In Down + Up, turning off the last selected switch selects the other. Both / Up: on = both, off = up. Both restores Down's brightness."));
   return wrapper;
 }
 
