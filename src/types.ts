@@ -9,7 +9,7 @@ export interface BigAssFansDeviceConfig {
   mac: string;
   debugLevels?: DebugLevelConfigEntry[];
   noLights?: boolean;
-  dualLightModeControl?: 'exclusive' | 'channels' | 'both-up' | 'legacy';
+  dualLightModeControl?: 'exclusive' | 'channels' | 'both-up';
   downlightEquipped?: LightDetectionOverride;
   uplightEquipped?: LightDetectionOverride;
   whoosh?: boolean;

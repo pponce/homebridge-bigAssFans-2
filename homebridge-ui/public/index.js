@@ -463,14 +463,13 @@ function createModeSelect(index, value) {
     ["exclusive", "Down / Up / Both — one selected"],
     ["channels", "Down + Up — combine switches"],
     ["both-up", "Both / Up — single switch"],
-    ["legacy", "Legacy separate dimmers"],
   ].forEach(([key, label]) => {
     const option = document.createElement("option");
     option.value = key;
     option.textContent = label;
     select.appendChild(option);
   });
-  select.value = value;
+  select.value = ["exclusive", "channels", "both-up"].includes(value) ? value : "exclusive";
   wrapper.append(select, createSmall("Used only when both lights are present. Mode switches stay selected while the light is off and do not turn it on. In Down + Up, turning off the last selected switch selects the other. Both / Up: on = both, off = up. Both restores Down's brightness."));
   return wrapper;
 }
@@ -664,7 +663,7 @@ function updateConfigFromForm(validate) {
     setLightOption(fan, card, "downlightEquipped");
     setLightOption(fan, card, "uplightEquipped");
     const lightModeControl = getFieldValue(card, "dualLightModeControl") || state.config.fans[index]?.dualLightModeControl || "exclusive";
-    fan.dualLightModeControl = ["exclusive", "channels", "both-up", "legacy"].includes(lightModeControl) ? lightModeControl : "exclusive";
+    fan.dualLightModeControl = ["exclusive", "channels", "both-up"].includes(lightModeControl) ? lightModeControl : "exclusive";
 
     booleanFields.forEach((field) => {
       const checked = getCheckboxValue(card, field.key);

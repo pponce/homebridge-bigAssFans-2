@@ -2,7 +2,7 @@
 
 import * as net from 'net';
 import type { Service, PlatformAccessory, CharacteristicValue, WithUUID } from 'homebridge';
-import { DualLightCoordinator, lightCommand, type WhiteLightState } from './lighting';
+import { DualLightCoordinator, lightCommand, normalizeDualLightModeControl, type WhiteLightState } from './lighting';
 import { emptyNightLightState, NightLightCoordinator, nightLightColor, nightLightCommand, type NightLightState } from './nightlight';
 import type { BigAssFansAccessoryContext, BigAssFansPlatformContext, LightDetectionOverride } from './types';
 import {
@@ -56,7 +56,7 @@ export class BigAssFans_i6PlatformAccessory {
   public whiteLight?: DualLightCoordinator;
   public whiteLightService?: Service;
   public lightModeServices: Map<number, Service> = new Map();
-  public dualLightModeControl: 'exclusive' | 'channels' | 'both-up' | 'legacy' = 'exclusive';
+  public dualLightModeControl: 'exclusive' | 'channels' | 'both-up' = 'exclusive';
   public whiteLightReport: Partial<WhiteLightState> = {};
   public nightLight?: NightLightCoordinator;
   public nightLightReport?: NightLightState;
@@ -211,7 +211,7 @@ export class BigAssFans_i6PlatformAccessory {
     this.IP = device.ip;
     this.MAC = device.mac;
     this.Name = device.name;
-    this.dualLightModeControl = device.dualLightModeControl ?? 'exclusive';
+    this.dualLightModeControl = normalizeDualLightModeControl(device.dualLightModeControl);
     this.platform.api.on('shutdown', () => {
       this.whiteLight?.disconnect();
       this.nightLight?.disconnect();
@@ -1302,8 +1302,7 @@ function makeServices(pA: BAF) {
     );
   }
 
-  const coordinated = !pA.noLights && pA.capabilities.hasLight && pA.capabilities.hasUplight &&
-    pA.dualLightModeControl !== 'legacy';
+  const coordinated = !pA.noLights && pA.capabilities.hasLight && pA.capabilities.hasUplight;
   if (coordinated) {
     makeCoordinatedLights(pA);
   } else {
@@ -1316,7 +1315,7 @@ function makeServices(pA: BAF) {
     }
   }
 
-  // downlight (single-light fans and the opt-in legacy layout)
+  // Single-light fans retain their existing dimmer services and handlers.
   if (!coordinated && pA.capabilities.hasLight) {
     if (pA.noLights) {
       pA.platform.log.info(`${pA.Name} downlight disabled by configuration '"noLights": true'`);

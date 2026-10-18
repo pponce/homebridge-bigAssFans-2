@@ -336,3 +336,15 @@ test("Both / Up single-switch mode survives Save and reopening", async () => {
   const reopened = await openPage(page.host.saved);
   assert.equal(reopened.cards()[0].querySelector('[data-fan-field="dualLightModeControl"]').value, "both-up");
 });
+
+test("legacy dual-light settings migrate to exclusive with only supported layouts offered", async () => {
+  const old = clone(config);
+  old.fans[0].dualLightModeControl = "legacy";
+  const page = await openPage([old]);
+  const select = page.cards()[0].querySelector('[data-fan-field="dualLightModeControl"]');
+  assert.deepEqual(select.children.map((option) => option.value), ["exclusive", "channels", "both-up"]);
+  assert.equal(select.value, "exclusive");
+  await page.hostSave();
+  assert.equal(page.host.saved[0].fans[0].dualLightModeControl, "exclusive");
+  assert.equal(page.host.saved[0].fans[0].mac, existingFan.mac);
+});

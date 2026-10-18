@@ -4,6 +4,7 @@ import * as net from 'net';
 import { mock } from 'node:test';
 
 import { __test__, BigAssFans_i6PlatformAccessory } from '../src/platformAccessory';
+import { normalizeDualLightModeControl } from '../src/lighting';
 import { parseCapabilitiesFromSlipData, parseMacFromSlipData, suggestCapabilityConfig, summarizeCapabilityExposure } from '../src/protocol';
 import { emptyNightLightState, NightLightCoordinator, nightLightCommand, type NightLightState } from '../src/nightlight';
 
@@ -1304,6 +1305,41 @@ async function testNightLightFeedbackTimeoutAndDisconnect() {
 }
 
 async function main() {
+  assert.equal(normalizeDualLightModeControl('legacy'), 'exclusive');
+  assert.equal(normalizeDualLightModeControl(undefined), 'exclusive');
+  for (const mode of ['exclusive', 'channels', 'both-up', 'legacy']) {
+    for (const uplight of [false, true]) {
+      const { state, accessory } = createDualLightTestState();
+      state.capabilities.hasLight = !uplight;
+      state.capabilities.hasUplight = uplight;
+      state.capabilities.hasStandbyLED = false;
+      state.dualLightModeControl = normalizeDualLightModeControl(mode);
+      for (const cached of [...accessory.services]) {
+        if (cached.UUID === 'Lightbulb') {
+          accessory.removeService(cached);
+        }
+      }
+      const existing = accessory.addService('Lightbulb', uplight ? 'uplight' : 'downlight', uplight ? 'light-2' : 'light-1');
+      __test__.makeServices(state);
+      assert.equal(state.whiteLight, undefined, 'Single-light fans must retain the existing control path');
+      assert.equal(accessory.getServiceById('Lightbulb', 'white-light'), undefined);
+      assert.equal(state.lightModeServices.size, 0);
+      const service = accessory.getServiceById('Lightbulb', uplight ? 'light-2' : 'light-1');
+      assert.ok(service);
+      assert.equal(service, existing, 'Single-light fans must preserve their cached service identity');
+      assert.ok(service.setters.has('On'));
+      assert.ok(service.setters.has('Brightness'));
+    }
+  }
+  {
+    const { state, accessory } = createDualLightTestState();
+    state.dualLightModeControl = normalizeDualLightModeControl('legacy');
+    __test__.makeServices(state);
+    assert.ok(accessory.getServiceById('Lightbulb', 'white-light'));
+    assert.equal(state.lightModeServices.size, 3);
+    state.whiteLight?.disconnect();
+    state.nightLight?.disconnect();
+  }
   await testBothUpSingleSwitchLayout();
   testMacDiscoveryReadsOnlyFanIdentity();
   await testNightLightControlsPreserveEnableAndIntensity();

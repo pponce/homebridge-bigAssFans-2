@@ -9,7 +9,8 @@ Choose **Dual-light mode controls** in the plugin settings:
 - **Down / Up / Both — one selected** (`exclusive`, default): exactly one mode remains selected, including while the light is off. Turning the selected mode switch off leaves it selected.
 - **Down + Up — combine switches** (`channels`): Down on / Up off selects Down; Up on / Down off selects Up; both on selects Both. Turning off the last selected switch turns on the other switch, so a valid mode always remains selected.
 - **Both / Up — single switch** (`both-up`): one **Both Lights** switch. On selects Both; Off selects Up only. The switch retains the selected mode while the light is off. Both restores Down/Both's remembered brightness and Up restores Up's. There is no Down-only selector in this layout. Changes made in the BAF app or with the remote are still honored, including Down-only; select Both Lights on or off to return to Both or Up.
-- **Legacy separate dimmers** (`legacy`): retain the old layout.
+
+The legacy separate-dimmer option has been removed for dual-light fans. Existing `legacy` configurations use Down / Up / Both instead, and the settings UI saves the replacement value. Single-light fans keep their existing dimmer and accessory identity. For dual-light fans migrating from legacy controls, HomeKit scenes referencing the replaced dimmers may need updating.
 
 In all coordinated layouts, mode switches select which lights the White Light dimmer controls. They do not control power. Turning White Light off or dimming it to zero retains the selected mode. Changing modes while off leaves the lights off; turning White Light on restores the selected mode's brightness. Mode changes while off do not send a brightness command, and off-state reports do not overwrite an existing remembered brightness.
 

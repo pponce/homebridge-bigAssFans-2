@@ -1,5 +1,11 @@
 /** The white emitters share one output level; selection is a global fan mode. */
 export type LightSelection = 0 | 1 | 2; // Both, Down, Up
+export type DualLightModeControl = 'exclusive' | 'channels' | 'both-up';
+
+export function normalizeDualLightModeControl(value: unknown): DualLightModeControl {
+  return value === 'channels' || value === 'both-up' ? value : 'exclusive';
+}
+
 export type LightPower = 0 | 1 | 2; // Off, On, Auto
 export interface LightMemory { down?: number; up?: number }
 export interface WhiteLightState {

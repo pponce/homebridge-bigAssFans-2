@@ -200,8 +200,7 @@
               "enum": [
                 "exclusive",
                 "channels",
-                "both-up",
-                "legacy"
+                "both-up"
               ],
               "default": "exclusive"
             },
