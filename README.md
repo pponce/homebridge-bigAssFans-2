@@ -171,7 +171,8 @@ Common optional choices:
 | `showFanOccupancySensor` | `false` | Exposes fan occupancy when supported by the fan. |
 | `showLightOccupancySensor` | `false` | Exposes light occupancy when supported by the fan. |
 | `showStandbyLED` | `false` | Exposes night light / standby LED controls when supported by the fan. Hidden if `noLights` is enabled. |
-| `dualLightModeControl` | `exclusive` | Dual-light layouts: `exclusive` (Down/Up/Both), `channels` (Down+Up), or `both-up` (one Both/Up switch), or `both-only` (Both with no mode switches). |
+| `dualLightModeControl` | `exclusive` for newly added fans | Dual-light layouts: `exclusive` (Down/Up/Both), `channels` (Down+Up), `both-up` (one Both/Up switch), `both-only` (Both with no mode switches), `separate-dimmers` (Down/Up tiles), or `separate-dimmers-both` (Down/Up/Both tiles). Every explicit layout overrides `bothlightsControl`. Omitting both fields retains the old two-dimmer layout; the custom UI explicitly sets `exclusive` for new fans. |
+| `bothlightsControl` | `false` | **Deprecated** (v1.2.0). Used when no supported `dualLightModeControl` is selected: `true` maps to `separate-dimmers-both`; `false` maps to `separate-dimmers`. With both fields omitted, the layout is also `separate-dimmers`. Set `dualLightModeControl` instead. |
 | `enableIncrementalButtons` | `false` | Adds momentary +/- buttons for brightness and fan speed. |
 
 ### Advanced Fields
@@ -242,7 +243,8 @@ Special thanks to:
 
 - [@bdraco](https://github.com/bdraco) for identifying the protobuf protocol.
 - [@jfroy](https://github.com/jfroy) for building a working BAF protobuf controller.
-- [@pponce](https://github.com/pponce), [@knmorgan](https://github.com/knmorgan), [@aveach](https://github.com/aveach), and the users who reported issues and helped debug.
+- [@pponce](https://github.com/pponce) for the ES6 dual-light layouts, night-light coordinator, and HomeKit state synchronization ([PR #3](https://github.com/applemanj/homebridge-bigAssFans-2/pull/3)).
+- [@knmorgan](https://github.com/knmorgan), [@aveach](https://github.com/aveach), and the users who reported issues and helped debug.
 - [HAP-NodeJS](https://github.com/KhaosT/HAP-NodeJS), [Homebridge](https://github.com/homebridge/homebridge), and [Big Ass Fans](https://www.bigassfans.com).
 
 ## License
