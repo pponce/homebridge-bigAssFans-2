@@ -1,0 +1,24 @@
+{
+  "purpose": "Homebridge plugin icon artwork and export provenance",
+  "generated_on": "2026-11-09",
+  "generation_method": "Built-in image generation",
+  "prompt": "Edit the first reference image, the black house with modern three-blade fan on yellow. The user wants THE HOUSE SHAPE, NOT A SHIELD. Reference image 2 is only a color-and-outline treatment reference: its black exterior background and thin yellow line around the emblem.\nKeep the house shape, the modern black three-blade fan, its yellow hub separation, and the yellow interior of the house from reference 1. Change ONLY the area OUTSIDE the house to solid pure black. Add a clean thin golden-yellow outline following the OUTERMOST edge of the house, including the peaked roof, small eaves, straight sides, rounded lower corners and base. The existing thick black house outline stays; the new thin yellow line traces outside that black outline so it separates the black house stroke from the solid black external background. Inside the thick black house outline, keep the golden-yellow house interior and centered black fan.\nVisual layers from outside toward center: solid BLACK external canvas -> thin YELLOW outer house contour -> existing thick BLACK house outline -> YELLOW interior field -> BLACK three-blade fan. Keep the modern fan shape and balanced blade proportions from reference 1. Make the outer yellow line thin but continuous and visible at a final 100 x 100 icon size, about 1.5% of the total canvas width. Center the house, retaining existing margins. Precisely square canvas. Flat, polished, high-contrast artwork. No shield shape, no donkey, no lettering, no text, no badge, no checkmark, no shadows, no photographic texture. One final icon only.",
+  "design": "Modern three-blade fan in a house; yellow interior, black exterior, thin yellow house border.",
+  "reference_roles": [
+    "Modern house-and-fan concept",
+    "Provided emblem used only as a black-background and yellow-outline treatment reference"
+  ],
+  "exports": [
+    {
+      "path": "assets/homebridge-bigassfans.png",
+      "width": 100,
+      "height": 100
+    },
+    {
+      "path": "assets/homebridge-bigassfans-512.png",
+      "width": 512,
+      "height": 512
+    }
+  ],
+  "processing": "Lanczos resize to exact square dimensions; metadata removed; artwork unchanged."
+}
