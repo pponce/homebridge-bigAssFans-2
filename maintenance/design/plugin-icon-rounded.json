@@ -1,0 +1,27 @@
+{
+  "purpose": "Rounded-corner icon export provenance",
+  "created_on": "2026-11-09",
+  "source_commit": "5f7a322063c9db2b2ffc82df71e831800c77f824",
+  "method": "Apply a geometric rounded-rectangle alpha mask to each original PNG with ImageMagick CopyOpacity. Render the mask at 8 times the final dimensions and downsample with Lanczos.",
+  "corner_radius_fraction": 0.08,
+  "exports": [
+    {
+      "source": "assets/homebridge-bigassfans.png",
+      "output": "assets/homebridge-bigassfans-rounded.png",
+      "width": 100,
+      "height": 100
+    },
+    {
+      "source": "assets/homebridge-bigassfans-512.png",
+      "output": "assets/homebridge-bigassfans-rounded-512.png",
+      "width": 512,
+      "height": 512
+    }
+  ],
+  "validation": {
+    "original_rgb_preserved_at_opaque_pixels": true,
+    "transparency_confined_to_four_corner_regions": true,
+    "extreme_corner_alpha": 0,
+    "non_corner_alpha": 255
+  }
+}
